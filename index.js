@@ -42,6 +42,10 @@ const utilToolsMenu = Markup.keyboard([
   ['📝 ធ្វើរូប 4x6 CV', '📝 ធ្វើរូបភាពច្បាស់ 4K'],
   ['🤖 AI កែ/បង្កើតរូបភាព', '📝 Remove BG'],
   ['🔄 URL To QR', '📜 Image To PDF'],
+  ['🖼️ PDF To Image', '📝 PDF To Words'],
+  ['📊 PDF to Power Point', '🔍 ចម្លងអត្ថបទពី Image (OCR)'],
+  ['✨ ធ្វើ style ឈ្មោះ', '🎙️ Voice To Text'],
+  ['🗣️ Text To Voice', '💬 ពិភាក្សាជាមួយ AI'],
   ['❌ ត្រឡប់ក្រោយ']
 ]).resize();
 
@@ -159,17 +163,24 @@ bot.hears('❌ ត្រឡប់ក្រោយ', (ctx) => {
 
 // Tools មុខងារផ្សេងៗ
 bot.hears('🔧 Tools មុខងារផ្សេងៗ', (ctx) => {
-  const text = `🛠 Tools មុខងារផ្សេងៗ (All Utility Tools)
+  const text = 🛠 Tools មុខងារផ្សេងៗ (All Utility Tools)
 
 👉 សូមជ្រើសរើសឧបករណ៍ដែលអ្នកត្រូវការប្រើប្រាស់៖
 
-1. 📁 File -> Link: បង្កើត Shareable Link សម្រាប់ផ្ញើ File គ្រប់ប្រភេទ
-2. 🔗 Image -> Link: បង្កើត Shareable Link សម្រាប់រូបភាពលឿនៗ
-3. 📝 ធ្វើរូប 4x6 CV: កែរូបធម្មតា ទៅជារូបថតស្អាតៗ 4x6 សំរាប់ដាក់ CV/កាត
-4. 📝 ធ្វើរូបភាពច្បាស់ 4K: បង្កើនគុណភាព និងភាពច្បាស់នៃរូបភាព Ultra HD
-5. 📝 Remove BG: លុបផ្ទៃខាងក្រោយរូបភាពឱ្យថ្លា (Transparent PNG)
-6. 📜 Image To PDF: បម្លែងរូបភាពទៅជាឯកសារ PDF
-7. 🔄 URL To QR: បង្កើត QR Code ពី Link ផ្សេងៗ`;
+1. 📁 File -> Link៖ បង្កើត Shareable Link សម្រាប់ផ្ញើ File គ្រប់ប្រភេទ
+2. 🖼️ Image -> Link៖ បង្កើត Shareable Link សម្រាប់រូបភាពលឿនៗ
+3. 👔 ធ្វើរូប 4x6 CV៖ កែរូបធម្មតា ទៅជារូបថតស្អាតៗ 4x6 សម្រាប់ CV/កាត
+4. 🌟 ធ្វើរូបភាពច្បាស់ 4K៖ បង្កើនគុណភាព និងភាពច្បាស់នៃរូបភាព Ultra HD
+5. ✂️ Remove BG៖ លុបផ្ទៃខាងក្រោយរូបភាពឱ្យថ្លា (Transparent PNG)
+6. 📜 Image To PDF៖ បម្លែងរូបភាពទៅជាឯកសារ PDF
+7. 🖼️ PDF To Image៖ បម្លែងឯកសារ PDF ទៅជារូបភាព JPG/PNG
+8. 📝 PDF To Words៖ បម្លែង PDF ទៅជាឯកសារ Word (.docx)
+9. 📊 PDF to Power Point៖ បម្លែង PDF ទៅជា Slide PowerPoint (.pptx)
+10. 🔍 ចម្លងអត្ថបទពី Image (OCR)៖ ស្រង់អត្ថបទចេញពីរូបភាព
+11. ✨ ធ្វើ style ឈ្មោះ៖ បង្កើតឈ្មោះស្អាតៗសម្រាប់ Games, FB, TikTok...
+12. 🎙️ Voice To Text៖ បម្លែងសម្លេង ឬ File Audio ទៅជាអត្ថបទ
+13. 🗣️ Text To Voice៖ បម្លែងអត្ថបទទៅជាសម្លេងនិយាយ
+14. 💬 ពិភាក្សាជាមួយ AI៖ ទីប្រឹក្សា AI គួរសម កក់ក្ដៅ (ការងារ, ការសិក្សា, អាជីវកម្ម...);
   ctx.reply(text, utilToolsMenu);
 });
 
