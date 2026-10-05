@@ -137,9 +137,9 @@ const adminMenu = Markup.keyboard([
 
 bot.command('admin', (ctx) => {
   if (ctx.from.id.toString() !== ADMIN_ID) return;
-  const text = \`👑 សូមស្វាគមន៍លោក Admin!
+  const text = `👑 សូមស្វាគមន៍លោក Admin!
 
-👉 ជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើប្រាស់៖\`;
+👉 ជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើប្រាស់៖`;
   ctx.reply(text, adminMenu);
 });
 
@@ -159,7 +159,7 @@ bot.hears('👥 ស្ថិតិអ្នកប្រើប្រាស់', a
   try {
     const snapshot = await db.collection('users').count().get();
     const total = snapshot.data().count;
-    ctx.reply(\`📊 ស្ថិតិអ្នកប្រើប្រាស់ Bot សរុបមានចំនួន៖ \${total} នាក់\`);
+    ctx.reply(`📊 ស្ថិតិអ្នកប្រើប្រាស់ Bot សរុបមានចំនួន៖ ${total} នាក់`);
   } catch (error) {
     ctx.reply('មានបញ្ហាក្នុងការទាញយកស្ថិតិ។');
   }
@@ -194,8 +194,8 @@ bot.command('addcredit', async (ctx) => {
       t.update(userRef, { credits: currentCredits + amount });
     });
     
-    ctx.reply(\`✅ ជោគជ័យ! បានបញ្ចូល \${amount} credits ទៅកាន់ User \${userId} រួចរាល់។\`);
-    bot.telegram.sendMessage(userId, \`🎉 អបអរសាទរ! Admin បានបញ្ចូល \${amount} Credits ចូលទៅក្នុងគណនីរបស់អ្នក! ប្រើប្រាស់មុខងារ Bot បានឥឡូវនេះ!\`).catch(()=>{});
+    ctx.reply(`✅ ជោគជ័យ! បានបញ្ចូល ${amount} credits ទៅកាន់ User ${userId} រួចរាល់។`);
+    bot.telegram.sendMessage(userId, `🎉 អបអរសាទរ! Admin បានបញ្ចូល ${amount} Credits ចូលទៅក្នុងគណនីរបស់អ្នក! ប្រើប្រាស់មុខងារ Bot បានឥឡូវនេះ!`).catch(()=>{});
   } catch (error) {
     console.error(error);
     ctx.reply('❌ បរាជ័យក្នុងការបញ្ចូល credits។');
