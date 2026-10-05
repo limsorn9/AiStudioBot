@@ -1,7 +1,8 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
-const admin = require('firebase-admin');
+const { initializeApp, cert, getApps } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // 1. រៀបចំ Firebase
 let serviceAccount;
@@ -14,8 +15,8 @@ try {
 }
 
 if (serviceAccount) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+  initializeApp({
+    credential: cert(serviceAccount),
     databaseURL: process.env.FIREBASE_DB_URL
   });
   console.log("Firebase បានតភ្ជាប់ជោគជ័យ");
@@ -23,7 +24,7 @@ if (serviceAccount) {
   console.log("មិនទាន់មាន FIREBASE_CREDENTIALS ត្រឹមត្រូវនៅក្នុង .env ទេ");
 }
 
-const db = admin.apps.length ? admin.firestore() : null;
+const db = getApps().length > 0 ? getFirestore() : null;
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 
 // Main Menu Keyboard
@@ -69,7 +70,7 @@ async function saveUser(ctx) {
         credits: 1000,
         invites: 0,
         referredBy: null,
-        joinedAt: admin.firestore.FieldValue.serverTimestamp()
+        joinedAt: FieldValue.serverTimestamp()
       });
     }
     return isNewUser;
