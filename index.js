@@ -259,8 +259,28 @@ bot.hears('📝 Remove BG', (ctx) => ctx.reply('សូមបញ្ជូនរ�
 bot.hears('🔄 URL To QR', (ctx) => ctx.reply('សូមផ្ញើ Link (URL) មកកាន់ខ្ញុំ ខ្ញុំនឹងបង្កើតជា QR Code ជូន 🔳'));
 bot.hears('📜 Image To PDF', (ctx) => ctx.reply('សូមផ្ញើរូបភាពមក ខ្ញុំនឹងបម្លែងវាទៅជាឯកសារ PDF 📑'));
 
-// Tools សម្រាប់រឿង Submenu Handlers
-bot.hears('💻 បកប្រែរឿង', (ctx) => ctx.reply('សូមបញ្ជូន វីដេអូរឿង ឬ Link មកទីនេះ ខ្ញុំនឹងបកប្រែជាភាសាខ្មែរជូន 🎬'));
+bot.hears('💻 បកប្រែរឿង', (ctx) => {
+  const text = \`📊 Dashboard: 🎬 បកប្រែរឿង
+[ 📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB) | 💰 តម្លៃ 1000 Credits / វីដេអូ ]
+
+🎞 ការកំណត់កាត់ភាគ៖ 🟢 ពេញមួយរឿង (Full)
+
+👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្ដង់ដារ៖ សម្លេងប្រុស & ស្រី)៖\`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('💬 ១. សម្លេងប្រុស (Standard)', 'voice_male')],
+    [Markup.button.callback('💬 ២. សម្លេងស្រី (Standard)', 'voice_female')],
+    [Markup.button.callback('🤖 ៣. សម្លេងប្រុស & ស្រី (Auto Both)', 'voice_both')],
+    [Markup.button.callback('⚙️ កំណត់កាត់ជាកង់៖ ពេញមួយរឿង (Full)', 'setting_full')],
+    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'back_to_menu')]
+  ]);
+
+  ctx.reply(text, inlineKeyboard);
+});
+
+bot.action('back_to_menu', (ctx) => {
+  ctx.deleteMessage().catch(() => {});
+});
 bot.hears('🎙️ SRT to Voice', (ctx) => ctx.reply('សូមបញ្ជូន File .srt មកទីនេះ ខ្ញុំនឹងបម្លែងវាជាសម្លេងខ្មែរ 🗣️'));
 bot.hears('🤖 Transcript SRT', (ctx) => ctx.reply('សូមបញ្ជូនវីដេអូ ឬសម្លេងមក ខ្ញុំនឹងស្រង់សម្លេងបកប្រែជា File .srt 📝'));
 bot.hears('🎙️ Clone សម្លេង', (ctx) => ctx.reply('មុខងារនេះតម្រូវឱ្យអ្នកផ្ញើសម្លេងគំរូមក ដើម្បីឱ្យ AI ត្រាប់តាម 🎤'));
