@@ -281,6 +281,29 @@ bot.hears('💻 បកប្រែរឿង', (ctx) => {
 bot.action('back_to_menu', (ctx) => {
   ctx.deleteMessage().catch(() => {});
 });
+
+const backOnlyMenu = Markup.keyboard([
+  ['❌ ត្រឡប់ក្រោយ']
+]).resize();
+
+bot.action(['voice_male', 'voice_female', 'voice_both'], (ctx) => {
+  ctx.deleteMessage().catch(() => {});
+  
+  let voiceType = 'សម្លេងប្រុស';
+  if (ctx.match[0] === 'voice_female') voiceType = 'សម្លេងស្រី';
+  if (ctx.match[0] === 'voice_both') voiceType = 'សម្លេងប្រុស & ស្រី';
+
+  const text = \`📊 Status: Ready for Upload
+🎙 សម្លេង៖ \${voiceType}
+🎞 កាត់ជាកង់/ភាគ៖ 🟢 ពេញមួយរឿង (Full)
+📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB)
+(ផ្ញើបានរហូតដល់ ១០ វីដេអូ)
+💰 តម្លៃ៖ 1000 Credits / វីដេអូ
+
+👉 សូមផ្ញើឯកសារវីដេអូរឿង ឬ Link (អាចផ្ញើជា File ឬ Link បានរហូតដល់ ១០ វីដេអូដំណាលគ្នា)៖\`;
+
+  ctx.reply(text, backOnlyMenu);
+});
 bot.hears('🎙️ SRT to Voice', (ctx) => ctx.reply('សូមបញ្ជូន File .srt មកទីនេះ ខ្ញុំនឹងបម្លែងវាជាសម្លេងខ្មែរ 🗣️'));
 bot.hears('🤖 Transcript SRT', (ctx) => ctx.reply('សូមបញ្ជូនវីដេអូ ឬសម្លេងមក ខ្ញុំនឹងស្រង់សម្លេងបកប្រែជា File .srt 📝'));
 bot.hears('🎙️ Clone សម្លេង', (ctx) => ctx.reply('មុខងារនេះតម្រូវឱ្យអ្នកផ្ញើសម្លេងគំរូមក ដើម្បីឱ្យ AI ត្រាប់តាម 🎤'));
