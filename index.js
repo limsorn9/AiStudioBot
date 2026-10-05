@@ -96,7 +96,7 @@ async function handleReferral(ctx, isNewUser, startPayload) {
               invites: currentInvites + 1 
             });
             // ផ្ញើសារប្រាប់អ្នកដែលបានអញ្ជើញ
-            bot.telegram.sendMessage(referrerId, \`🎉 អបអរសាទរ! មិត្តភក្តិរបស់អ្នកបានចុះឈ្មោះប្រើប្រាស់ Bot។ អ្នកទទួលបាន +200 Credits 🎁\`);
+            bot.telegram.sendMessage(referrerId, `🎉 អបអរសាទរ! មិត្តភក្តិរបស់អ្នកបានចុះឈ្មោះប្រើប្រាស់ Bot។ អ្នកទទួលបាន +200 Credits 🎁`);
           }
         });
         
@@ -131,12 +131,12 @@ bot.start(async (ctx) => {
   const credits = userData.credits || 1000;
   const invites = userData.invites || 0;
 
-  const welcomeText = \`👤 ព័ត៌មានគណនីរបស់អ្នក
+  const welcomeText = `👤 ព័ត៌មានគណនីរបស់អ្នក
 
-ID User ID: \${ctx.from.id}
-ឈ្មោះ: @\${ctx.from.username || ctx.from.first_name}
-សមតុល្យ: \${credits} Credits
-មិត្តភក្តិបានអញ្ជើញ: \${invites} នាក់
+ID User ID: ${ctx.from.id}
+ឈ្មោះ: @${ctx.from.username || ctx.from.first_name}
+សមតុល្យ: ${credits} Credits
+មិត្តភក្តិបានអញ្ជើញ: ${invites} នាក់
 
 🤖 សេចក្តីណែនាំអំពីមុខងាររបស់ Bot:
 1. 🎬 បកប្រែវីដេអូ៖ បកប្រែសម្រួលវីដេអូទៅជាភាសាខ្មែរស្វ័យប្រវត្តិ។
@@ -145,7 +145,7 @@ ID User ID: \${ctx.from.id}
 4. 🎙️ ជ្រើសរើសសំឡេង៖ ជ្រើសរើសសំឡេង AI ស្រី/ប្រុស និង ElevenLabs Free។
 5. 🛠️ All Tools៖ ឧបករណ៍ជំនួយមានដូចជា ធ្វើរូបភាពច្បាស់, OCR ស្កេនអត្ថបទ, ធ្វើសញ្ញាឈ្មោះ និង AI ដោះស្រាយលំហាត់។
 6. 🎁 អញ្ជើញមិត្តភក្តិ៖ ទទួលបាន +200 Credits ក្នុងមិត្តភក្តិ ១ នាក់ដែលចុះឈ្មោះប្រើប្រាស់ Bot។
-7. 💵 បញ្ចូលលុយ (Topup)៖ បញ្ចូល Credit ស្វ័យប្រវត្តិបញ្ជូនតាមរយៈបាកុង KHQR។\`;
+7. 💵 បញ្ចូលលុយ (Topup)៖ បញ្ចូល Credit ស្វ័យប្រវត្តិបញ្ជូនតាមរយៈបាកុង KHQR។`;
 
   ctx.reply(welcomeText, mainMenu);
 });
@@ -158,7 +158,7 @@ bot.hears('❌ ត្រឡប់ក្រោយ', (ctx) => {
 
 // Tools មុខងារផ្សេងៗ
 bot.hears('🔧 Tools មុខងារផ្សេងៗ', (ctx) => {
-  const text = \`🛠 Tools មុខងារផ្សេងៗ (All Utility Tools)
+  const text = `🛠 Tools មុខងារផ្សេងៗ (All Utility Tools)
 
 👉 សូមជ្រើសរើសឧបករណ៍ដែលអ្នកត្រូវការប្រើប្រាស់៖
 
@@ -168,13 +168,13 @@ bot.hears('🔧 Tools មុខងារផ្សេងៗ', (ctx) => {
 4. 📝 ធ្វើរូបភាពច្បាស់ 4K: បង្កើនគុណភាព និងភាពច្បាស់នៃរូបភាព Ultra HD
 5. 📝 Remove BG: លុបផ្ទៃខាងក្រោយរូបភាពឱ្យថ្លា (Transparent PNG)
 6. 📜 Image To PDF: បម្លែងរូបភាពទៅជាឯកសារ PDF
-7. 🔄 URL To QR: បង្កើត QR Code ពី Link ផ្សេងៗ\`;
+7. 🔄 URL To QR: បង្កើត QR Code ពី Link ផ្សេងៗ`;
   ctx.reply(text, utilToolsMenu);
 });
 
 // Tools សម្រាប់រឿង
 bot.hears('🤖 Tools សម្រាប់រឿង', (ctx) => {
-  const text = \`🎬 Tools សម្រាប់រឿង (Story Translation & Video Production)
+  const text = `🎬 Tools សម្រាប់រឿង (Story Translation & Video Production)
 
 👉 សូមជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើ៖
 
@@ -182,15 +182,15 @@ bot.hears('🤖 Tools សម្រាប់រឿង', (ctx) => {
 2. 🎙️ SRT to Voice៖ បម្លែង SRT ទៅជាសម្លេងនិយាយខ្មែរ (Standard & Human Voice)
 3. 🤖 Transcript SRT៖ ស្រង់សម្លេង និងបកប្រែជា File .srt ជាមួយ Gemini AI
 4. 🎙️ Clone សម្លេង៖ បង្កើតសម្លេងមនុស្សពិត ស្រី/ប្រុស តាមសម្លេងរបស់អ្នក
-5. ⬇️ ទាញយករឿង៖ ទាញយកវីដេអូរឿងពី FB, TikTok, YT, Douyin, Kuaishou, Dramabox...\`;
+5. ⬇️ ទាញយករឿង៖ ទាញយកវីដេអូរឿងពី FB, TikTok, YT, Douyin, Kuaishou, Dramabox...`;
   ctx.reply(text, storyToolsMenu);
 });
 
 // ពិនិត្យ Credit
 bot.hears('💸 ពិនិត្យ Credit', async (ctx) => {
   const userData = await getUserInfo(ctx.from.id);
-  const text = \`👤 ប្រភេទគណនី៖ 👤 សមាជិកធម្មតា
-💳 សមតុល្យបច្ចុប្បន្ន៖ \${userData.credits || 0} Credits\`;
+  const text = `👤 ប្រភេទគណនី៖ 👤 សមាជិកធម្មតា
+💳 សមតុល្យបច្ចុប្បន្ន៖ ${userData.credits || 0} Credits`;
   
   ctx.reply(text, Markup.inlineKeyboard([
     [Markup.button.callback('🎁 អញ្ជើញមិត្តភក្តិ (+200 Credits)', 'invite_friend')]
@@ -210,24 +210,24 @@ bot.action('invite_friend', (ctx) => {
 async function sendInviteMessage(ctx) {
   const userData = await getUserInfo(ctx.from.id);
   const botUsername = ctx.botInfo.username;
-  const inviteLink = \`https://t.me/\${botUsername}?start=ref_\${ctx.from.id}\`;
+  const inviteLink = `https://t.me/${botUsername}?start=ref_${ctx.from.id}`;
   
   const totalEarned = (userData.invites || 0) * 200;
   
-  const text = \`🎁 កម្មវិធីអញ្ជើញមិត្តភក្តិ (Referral Program)
+  const text = `🎁 កម្មវិធីអញ្ជើញមិត្តភក្តិ (Referral Program)
 
 ទទួលបាន +200 Credits ដោយឥតគិតថ្លៃ សម្រាប់មិត្តភក្តិគ្រប់ៗគ្នាដែលបានចុះឈ្មោះប្រើប្រាស់ Bot តាមរយៈ Link របស់អ្នក! 🚀
 
 🔗 Link អញ្ជើញរបស់អ្នក៖
-\${inviteLink}
+${inviteLink}
 
 📊 ស្ថិតិរបស់អ្នក៖
-• ចំនួនមិត្តភក្តិបានអញ្ជើញ៖ \${userData.invites || 0} នាក់
-• Credit ទទួលបានសរុប៖ +\${totalEarned} Credits
+• ចំនួនមិត្តភក្តិបានអញ្ជើញ៖ ${userData.invites || 0} នាក់
+• Credit ទទួលបានសរុប៖ +${totalEarned} Credits
 
-💡 ចម្លង ឬ Share Link ខាងលើទៅកាន់មិត្តភក្តិរបស់អ្នក! នៅពេលពួកគេចុច Start ប្រើប្រាស់ Bot អ្នកនឹងទទួលបាន 200 Credits ភ្លាមៗដោយស្វ័យប្រវត្តិ ។\`;
+💡 ចម្លង ឬ Share Link ខាងលើទៅកាន់មិត្តភក្តិរបស់អ្នក! នៅពេលពួកគេចុច Start ប្រើប្រាស់ Bot អ្នកនឹងទទួលបាន 200 Credits ភ្លាមៗដោយស្វ័យប្រវត្តិ ។`;
 
-  const shareUrl = \`https://t.me/share/url?url=\${encodeURIComponent(inviteLink)}&text=\${encodeURIComponent('ចូលរួមប្រើប្រាស់ Bot ទាំងអស់គ្នា!')}\`;
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent('ចូលរួមប្រើប្រាស់ Bot ទាំងអស់គ្នា!')}`;
   
   ctx.reply(text, Markup.inlineKeyboard([
     [Markup.button.url('📢 ផ្ញើបន្តទៅកាន់មិត្តភក្តិ (Share)', shareUrl)]
@@ -237,7 +237,7 @@ async function sendInviteMessage(ctx) {
 // គណនី & VIP
 bot.hears('👑 គណនី & VIP', async (ctx) => {
   const userData = await getUserInfo(ctx.from.id);
-  ctx.reply(\`👤 គណនីរបស់អ្នកគឺធម្មតា មាន \${userData.credits || 0} Credits ។\`);
+  ctx.reply(`👤 គណនីរបស់អ្នកគឺធម្មតា មាន ${userData.credits || 0} Credits ។`);
 });
 
 bot.hears('💳 បញ្ចូលលុយ (Topup)', (ctx) => {
@@ -253,10 +253,10 @@ const app = express();
 app.use(express.json());
 
 if (process.env.NODE_ENV === 'production' && process.env.WebHook_URL) {
-  const webhookUrl = \`\${process.env.WebHook_URL}/bot\${process.env.TELEGRAM_TOKEN}\`;
+  const webhookUrl = `${process.env.WebHook_URL}/bot${process.env.TELEGRAM_TOKEN}`;
   bot.telegram.setWebhook(webhookUrl);
-  app.use(bot.webhookCallback(\`/bot\${process.env.TELEGRAM_TOKEN}\`));
-  console.log(\`Webhook ត្រូវបានភ្ជាប់ទៅកាន់ \${webhookUrl}\`);
+  app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_TOKEN}`));
+  console.log(`Webhook ត្រូវបានភ្ជាប់ទៅកាន់ ${webhookUrl}`);
 } else {
   bot.launch();
   console.log('Bot កំពុងដំណើរការ...');
@@ -268,7 +268,7 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(\`Web Server ដំណើរការលើ Port \${PORT}\`);
+  console.log(`Web Server ដំណើរការលើ Port ${PORT}`);
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
