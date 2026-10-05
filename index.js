@@ -271,12 +271,12 @@ bot.hears('🔄 URL To QR', (ctx) => ctx.reply('សូមផ្ញើ Link (URL)
 bot.hears('📜 Image To PDF', (ctx) => ctx.reply('សូមផ្ញើរូបភាពមក ខ្ញុំនឹងបម្លែងវាទៅជាឯកសារ PDF 📑'));
 
 bot.hears('💻 បកប្រែរឿង', (ctx) => {
-  const text = \`📊 Dashboard: 🎬 បកប្រែរឿង
+  const text = `📊 Dashboard: 🎬 បកប្រែរឿង
 [ 📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB) | 💰 តម្លៃ 1000 Credits / វីដេអូ ]
 
 🎞 ការកំណត់កាត់ភាគ៖ 🟢 ពេញមួយរឿង (Full)
 
-👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្ដង់ដារ៖ សម្លេងប្រុស & ស្រី)៖\`;
+👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្ដង់ដារ៖ សម្លេងប្រុស & ស្រី)៖`;
 
   const inlineKeyboard = Markup.inlineKeyboard([
     [Markup.button.callback('💬 ១. សម្លេងប្រុស (Standard)', 'voice_male')],
@@ -304,14 +304,14 @@ bot.action(['voice_male', 'voice_female', 'voice_both'], (ctx) => {
   if (ctx.match[0] === 'voice_female') voiceType = 'សម្លេងស្រី';
   if (ctx.match[0] === 'voice_both') voiceType = 'សម្លេងប្រុស & ស្រី';
 
-  const text = \`📊 Status: Ready for Upload
-🎙 សម្លេង៖ \${voiceType}
+  const text = `📊 Status: Ready for Upload
+🎙 សម្លេង៖ ${voiceType}
 🎞 កាត់ជាកង់/ភាគ៖ 🟢 ពេញមួយរឿង (Full)
 📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB)
 (ផ្ញើបានរហូតដល់ ១០ វីដេអូ)
 💰 តម្លៃ៖ 1000 Credits / វីដេអូ
 
-👉 សូមផ្ញើឯកសារវីដេអូរឿង ឬ Link (អាចផ្ញើជា File ឬ Link បានរហូតដល់ ១០ វីដេអូដំណាលគ្នា)៖\`;
+👉 សូមផ្ញើឯកសារវីដេអូរឿង ឬ Link (អាចផ្ញើជា File ឬ Link បានរហូតដល់ ១០ វីដេអូដំណាលគ្នា)៖`;
 
   ctx.reply(text, backOnlyMenu);
 });
