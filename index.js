@@ -249,6 +249,23 @@ bot.hears('⭐ Challenge & Giveaway', (ctx) => {
   ctx.reply('មិនទាន់មានកម្មវិធី Challenge ថ្មីៗទេនៅពេលនេះ...');
 });
 
+// Tools មុខងារផ្សេងៗ Submenu Handlers
+bot.hears('📁 File -> Link', (ctx) => ctx.reply('សូមបញ្ជូន File របស់អ្នកមកទីនេះដើម្បីបង្កើត Link 📥'));
+bot.hears('🔗 Image -> Link', (ctx) => ctx.reply('សូមបញ្ជូនរូបភាពរបស់អ្នកមកទីនេះដើម្បីបង្កើត Link 🖼️'));
+bot.hears('📝 ធ្វើរូប 4x6 CV', (ctx) => ctx.reply('សូមបញ្ជូនរូបថតធម្មតារបស់អ្នកមក ខ្ញុំនឹងកែវាជា 4x6 សម្រាប់ CV 👔'));
+bot.hears('📝 ធ្វើរូបភាពច្បាស់ 4K', (ctx) => ctx.reply('សូមបញ្ជូនរូបភាពដែលព្រិលមកទីនេះ ខ្ញុំនឹងធ្វើឱ្យវាច្បាស់កម្រិត 4K 🌟'));
+bot.hears('🤖 AI កែ/បង្កើតរូបភាព', (ctx) => ctx.reply('សូមបញ្ជូន Prompt ឬរូបភាពមក ខ្ញុំនឹងឱ្យ AI គូរ/កែវាជូន 🎨'));
+bot.hears('📝 Remove BG', (ctx) => ctx.reply('សូមបញ្ជូនរូបភាពមក ខ្ញុំនឹងលុបផ្ទៃខាងក្រោយចេញ (Transparent PNG) ✂️'));
+bot.hears('🔄 URL To QR', (ctx) => ctx.reply('សូមផ្ញើ Link (URL) មកកាន់ខ្ញុំ ខ្ញុំនឹងបង្កើតជា QR Code ជូន 🔳'));
+bot.hears('📜 Image To PDF', (ctx) => ctx.reply('សូមផ្ញើរូបភាពមក ខ្ញុំនឹងបម្លែងវាទៅជាឯកសារ PDF 📑'));
+
+// Tools សម្រាប់រឿង Submenu Handlers
+bot.hears('💻 បកប្រែរឿង', (ctx) => ctx.reply('សូមបញ្ជូន វីដេអូរឿង ឬ Link មកទីនេះ ខ្ញុំនឹងបកប្រែជាភាសាខ្មែរជូន 🎬'));
+bot.hears('🎙️ SRT to Voice', (ctx) => ctx.reply('សូមបញ្ជូន File .srt មកទីនេះ ខ្ញុំនឹងបម្លែងវាជាសម្លេងខ្មែរ 🗣️'));
+bot.hears('🤖 Transcript SRT', (ctx) => ctx.reply('សូមបញ្ជូនវីដេអូ ឬសម្លេងមក ខ្ញុំនឹងស្រង់សម្លេងបកប្រែជា File .srt 📝'));
+bot.hears('🎙️ Clone សម្លេង', (ctx) => ctx.reply('មុខងារនេះតម្រូវឱ្យអ្នកផ្ញើសម្លេងគំរូមក ដើម្បីឱ្យ AI ត្រាប់តាម 🎤'));
+bot.hears('⬇️ ទាញយករឿង', (ctx) => ctx.reply('សូមផ្ញើ Link វីដេអូពី FB, TikTok, YT... មកទីនេះ ខ្ញុំនឹងទាញយកជូន 📥'));
+
 // Express Server Setup
 const app = express();
 app.use(express.json());
