@@ -26,6 +26,7 @@ if (serviceAccount) {
 
 const db = getApps().length > 0 ? getFirestore() : null;
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+const ADMIN_ID = process.env.ADMIN_ID || '240224709';
 
 // Main Menu Keyboard
 const mainMenu = Markup.keyboard([
@@ -126,6 +127,80 @@ async function getUserInfo(userId) {
   }
   return { credits: 0, invites: 0, totalEarned: 0 };
 }
+
+// Admin Menu Keyboard
+const adminMenu = Markup.keyboard([
+  ['📢 ផ្សព្វផ្សាយសារ (Broadcast)'],
+  ['💳 បញ្ចូលលុយ (Add Credits)', '👥 ស្ថិតិអ្នកប្រើប្រាស់'],
+  ['❌ ត្រឡប់ក្រោយ']
+]).resize();
+
+bot.command('admin', (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  const text = \`👑 សូមស្វាគមន៍លោក Admin!
+
+👉 ជ្រើសរើសមុខងារដែលអ្នកចង់ប្រើប្រាស់៖\`;
+  ctx.reply(text, adminMenu);
+});
+
+bot.hears('📢 ផ្សព្វផ្សាយសារ (Broadcast)', (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  ctx.reply('មុខងារនេះនឹងអនុញ្ញាតឱ្យអ្នកផ្ញើសារទៅកាន់ User ទាំងអស់។ (កំពុងអភិវឌ្ឍ...)');
+});
+
+bot.hears('💳 បញ្ចូលលុយ (Add Credits)', (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  ctx.reply('ដើម្បីបញ្ចូលលុយ សូមប្រើ Command នេះ៖\\n\\n/addcredit [User_ID] [ចំនួន Credits]');
+});
+
+bot.hears('👥 ស្ថិតិអ្នកប្រើប្រាស់', async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  if (!db) return ctx.reply('Database មិនទាន់ដំណើរការទេ');
+  try {
+    const snapshot = await db.collection('users').count().get();
+    const total = snapshot.data().count;
+    ctx.reply(\`📊 ស្ថិតិអ្នកប្រើប្រាស់ Bot សរុបមានចំនួន៖ \${total} នាក់\`);
+  } catch (error) {
+    ctx.reply('មានបញ្ហាក្នុងការទាញយកស្ថិតិ។');
+  }
+});
+
+bot.command('addcredit', async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  const args = ctx.message.text.split(' ');
+  if (args.length !== 3) {
+    return ctx.reply('⚠️ ទម្រង់មិនត្រឹមត្រូវ។ ប្រើ៖ /addcredit [User_ID] [ចំនួន]');
+  }
+  
+  const userId = args[1];
+  const amount = parseInt(args[2]);
+  
+  if (isNaN(amount)) {
+    return ctx.reply('⚠️ ចំនួន credits ត្រូវតែជាលេខ។');
+  }
+
+  if (!db) return ctx.reply('Database មិនដំណើរការទេ។');
+
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const doc = await userRef.get();
+    if (!doc.exists) {
+      return ctx.reply('⚠️ រកមិនឃើញ User នេះក្នុងប្រព័ន្ធទេ។ សូមពិនិត្យមើល ID ម្ដងទៀត។');
+    }
+    
+    await db.runTransaction(async (t) => {
+      const userDoc = await t.get(userRef);
+      const currentCredits = userDoc.data().credits || 0;
+      t.update(userRef, { credits: currentCredits + amount });
+    });
+    
+    ctx.reply(\`✅ ជោគជ័យ! បានបញ្ចូល \${amount} credits ទៅកាន់ User \${userId} រួចរាល់។\`);
+    bot.telegram.sendMessage(userId, \`🎉 អបអរសាទរ! Admin បានបញ្ចូល \${amount} Credits ចូលទៅក្នុងគណនីរបស់អ្នក! ប្រើប្រាស់មុខងារ Bot បានឥឡូវនេះ!\`).catch(()=>{});
+  } catch (error) {
+    console.error(error);
+    ctx.reply('❌ បរាជ័យក្នុងការបញ្ចូល credits។');
+  }
+});
 
 bot.start(async (ctx) => {
   const isNewUser = await saveUser(ctx);
