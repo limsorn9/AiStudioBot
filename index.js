@@ -807,20 +807,24 @@ app.use(express.json());
 
 const rawWebhook = process.env.WebHook_URL || '';
 const cleanWebhook = rawWebhook.trim().replace(/\/+$/, '');
+const isRenderDead = cleanWebhook.includes('onrender.com');
 
-if (cleanWebhook && !process.env.USE_POLLING) {
+if (cleanWebhook && !process.env.USE_POLLING && !isRenderDead) {
   const webhookUrl = `${cleanWebhook}/bot${process.env.TELEGRAM_TOKEN}`;
   bot.telegram.setWebhook(webhookUrl)
     .then(() => console.log(`✅ Webhook ត្រូវបានភ្ជាប់ទៅកាន់ ${webhookUrl}`))
     .catch((err) => console.error('❌ Webhook error:', err.message));
   app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_TOKEN}`));
 } else {
-  bot.telegram.deleteWebhook().catch(() => {});
-  bot.launch({ dropPendingUpdates: false }).then(() => {
-    console.log('✅ Bot កំពុងដំណើរការ (Polling Mode)...');
-  }).catch((err) => {
-    console.error('❌ Polling launch failed:', err.message);
-  });
+  (async () => {
+    try {
+      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+      await bot.launch({ dropPendingUpdates: true });
+      console.log('✅ Bot កំពុងដំណើរការ (Polling Mode លើ VPS)...');
+    } catch (err) {
+      console.error('❌ Polling launch failed:', err.message);
+    }
+  })();
 }
 
 app.get('/', (req, res) => {
