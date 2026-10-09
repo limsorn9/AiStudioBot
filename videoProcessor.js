@@ -2,7 +2,22 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, exec } = require('child_process');
-const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
+let MsEdgeTTS = null;
+let OUTPUT_FORMAT = null;
+
+function loadEdgeTTS() {
+  if (!MsEdgeTTS) {
+    try {
+      const edgeModule = require('msedge-tts');
+      MsEdgeTTS = edgeModule.MsEdgeTTS;
+      OUTPUT_FORMAT = edgeModule.OUTPUT_FORMAT;
+    } catch (e) {
+      console.warn('⚠️ msedge-tts is not installed yet. Run "npm install" on VPS.');
+    }
+  }
+  return MsEdgeTTS;
+}
+loadEdgeTTS();
 
 // --- Helper: Run Shell Command with Promise ---
 function runCmd(cmd) {
@@ -311,6 +326,9 @@ async function transcribeAudio(audioPath) {
 
 // --- Helper: Khmer Speech Synthesis via Edge-TTS ---
 async function synthesizeKhmerVoice(text, voiceGender, outputDir) {
+  if (!loadEdgeTTS()) {
+    throw new Error('កញ្ចប់ msedge-tts មិនទាន់ដំឡើងលើ VPS ទេ។ សូមវាយបញ្ជា "npm install" លើ VPS ជាមុនសិន!');
+  }
   const tts = new MsEdgeTTS();
   const voiceName = (voiceGender && voiceGender.includes('ស្រី'))
     ? 'km-KH-SreymomNeural'
