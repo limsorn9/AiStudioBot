@@ -106,6 +106,25 @@ function parseNumberedOutput(text, count) {
   return result;
 }
 
+// Helper: Polish translated Khmer for natural movie dubbing & breathing pauses
+function polishKhmerDubbing(text, gender) {
+  let cleaned = (text || '').trim();
+  cleaned = cleaned.replace(/^\s*\((ប្រុស|ស្រី)\)\s*/i, '').trim();
+
+  // Fix common machine-translation artifacts from Chinese dramas
+  cleaned = cleaned.replace(/សង្គ្រាមបរទេស/g, 'បំណុលគេ');
+  cleaned = cleaned.replace(/ចំណុចទាញ/g, 'បញ្ហា');
+  cleaned = cleaned.replace(/រួមភេទ/g, 'ធ្វើរឿងមិនគប្បី');
+  cleaned = cleaned.replace(/លោក Hu Xiuchun/g, 'ហ៊ូស៊ូឈុន');
+  cleaned = cleaned.replace(/លោក Xiuchun/g, 'ស៊ូឈុន');
+
+  // Natural breath cadence for TTS
+  if (!/[.!?។,៕\.\.\.]$/.test(cleaned)) {
+    cleaned += '...';
+  }
+  return cleaned;
+}
+
 // 1. AI Batch Translation via Gemini (96% less API quota, instant results)
 async function batchTranslateWithGemini(lines) {
   const keys = getAllGeminiKeys();
@@ -923,12 +942,12 @@ async function processStoryVideo({
 
       for (let i = 0; i < validSegments.length; i++) {
         const seg = validSegments[i];
-        let cleanKhmer = (translatedTexts[i] || seg.text).trim();
-        // Automatically attach (ប្រុស) or (ស្រី) based on audio pitch if not already present
-        if (!cleanKhmer.startsWith('(ប្រុស)') && !cleanKhmer.startsWith('(ស្រី)')) {
-          const genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
-          cleanKhmer = genderTag + cleanKhmer;
-        }
+        let rawKhmer = (translatedTexts[i] || seg.text).trim();
+        rawKhmer = polishKhmerDubbing(rawKhmer, seg.gender);
+
+        const genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
+        const cleanKhmer = genderTag + rawKhmer;
+
         translatedTexts[i] = cleanKhmer;
         if (cleanKhmer) {
           translatedSegments.push(cleanKhmer);
