@@ -65,33 +65,211 @@ function getRandomUserAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-// 1. AI Translation via Gemini (0% risk of block, natural Khmer dubbing tone)
-async function translateWithGemini(text) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-  try {
-    const prompt = `You are an expert movie translator and dubber. Translate the following text into natural, spoken Khmer language suitable for movie narration. Output ONLY the translated Khmer text, without explanations or English:\n\n${text}`;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3 }
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (khmer && khmer.trim()) return khmer.trim();
+// --- Multi-Key Gemini Helper (Eliminates 429 Quota Exceeded) ---
+let currentGeminiKeyIndex = 0;
+function getAllGeminiKeys() {
+  const raw = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
+  return raw.split(',').map(k => k.trim()).filter(Boolean);
+}
+
+function getGeminiKey() {
+  const keys = getAllGeminiKeys();
+  if (!keys.length) return null;
+  return keys[currentGeminiKeyIndex % keys.length];
+}
+
+function rotateGeminiKey() {
+  const keys = getAllGeminiKeys();
+  if (keys.length > 1) {
+    currentGeminiKeyIndex = (currentGeminiKeyIndex + 1) % keys.length;
+    console.log(`🔄 Switched to Gemini Key #${currentGeminiKeyIndex + 1}/${keys.length}`);
+  }
+}
+
+function parseNumberedOutput(text, count) {
+  const result = new Array(count).fill('');
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(/^\[?(\d+)\]?[\.\:\s\)\-]+\s*(.+)$/);
+    if (match) {
+      const idx = parseInt(match[1]) - 1;
+      if (idx >= 0 && idx < count) {
+        result[idx] = match[2].trim();
+      }
     }
-  } catch (err) {
-    console.warn('Gemini translation error:', err.message);
+  }
+  for (let i = 0; i < count; i++) {
+    if (!result[i] && lines[i]) {
+      result[i] = lines[i].replace(/^\[?\d+\]?[\.\:\s\)\-]+\s*/, '').trim();
+    }
+  }
+  return result;
+}
+
+// 1. AI Batch Translation via Gemini (96% less API quota, instant results)
+async function batchTranslateWithGemini(lines) {
+  const keys = getAllGeminiKeys();
+  if (!keys.length) return null;
+
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const apiKey = getGeminiKey();
+    try {
+      const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
+      const prompt = `You are a professional movie dialogue translator into natural spoken Khmer language.
+Translate each numbered line below into spoken Khmer for movie narration and dubbing.
+IMPORTANT RULES:
+1. You MUST keep the exact same [number] prefix for each line.
+2. Output ONLY the numbered translated lines in spoken Khmer, without introductory text or explanations.
+
+${numberedText}`;
+
+      const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3 }
+        })
+      });
+
+      if (res.status === 429) {
+        console.warn(`[Gemini 429 Quota Exceeded] Rotating API key...`);
+        rotateGeminiKey();
+        continue;
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (khmer) {
+          const parsed = parseNumberedOutput(khmer, lines.length);
+          if (parsed && parsed.some(Boolean)) return parsed;
+        }
+      }
+    } catch (err) {
+      console.warn('Gemini batch error:', err.message);
+      rotateGeminiKey();
+    }
   }
   return null;
 }
 
-// 2. AI Translation via Groq LLM (ultrafast, 0% risk of block)
+// 2. AI Batch Translation via Groq LLM (free, zero quota lock)
+async function batchTranslateWithGroq(lines) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
+    const prompt = `Translate each numbered line into natural spoken Khmer for video dubbing. Keep [number] prefixes. Output ONLY the translated lines:\n\n${numberedText}`;
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const khmer = data.choices?.[0]?.message?.content;
+      if (khmer) {
+        const parsed = parseNumberedOutput(khmer, lines.length);
+        if (parsed && parsed.some(Boolean)) return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn('Groq batch error:', err.message);
+  }
+  return null;
+}
+
+// 3. Batch Translate Entire Segments Array (Saves 95%+ Quota)
+async function batchTranslateSegments(segments, sourceLang) {
+  if (!segments || !segments.length) return [];
+  if (sourceLang === 'km') {
+    return segments.map(s => s.text);
+  }
+
+  const batchSize = 25; // Group 25 lines at a time into 1 request
+  const allResults = [];
+
+  for (let b = 0; b < segments.length; b += batchSize) {
+    const chunk = segments.slice(b, b + batchSize);
+    const chunkTexts = chunk.map(s => s.text);
+
+    // 1. Try Gemini Batch (Consumes only 1 request per 25 lines!)
+    let translated = await batchTranslateWithGemini(chunkTexts);
+
+    // 2. Try Groq Batch (Free backup)
+    if (!translated) {
+      translated = await batchTranslateWithGroq(chunkTexts);
+    }
+
+    // 3. Fallback: Translate individually with Google if both AI batches fail
+    if (!translated) {
+      translated = [];
+      for (const t of chunkTexts) {
+        const res = await translateToKhmer(t);
+        translated.push(res);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    // Fill missing items with original
+    for (let i = 0; i < chunkTexts.length; i++) {
+      allResults.push((translated[i] && translated[i].trim()) || chunkTexts[i]);
+    }
+
+    // Polite delay between batches
+    if (b + batchSize < segments.length) {
+      await new Promise(r => setTimeout(r, 800));
+    }
+  }
+
+  return allResults;
+}
+
+// 4. Single-Text Gemini Fallback
+async function translateWithGemini(text) {
+  const keys = getAllGeminiKeys();
+  if (!keys.length) return null;
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const apiKey = getGeminiKey();
+    try {
+      const prompt = `You are an expert movie translator and dubber. Translate the following text into natural, spoken Khmer language suitable for movie narration. Output ONLY the translated Khmer text, without explanations or English:\n\n${text}`;
+      const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3 }
+        })
+      });
+      if (res.status === 429) {
+        rotateGeminiKey();
+        continue;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (khmer && khmer.trim()) return khmer.trim();
+      }
+    } catch (err) {
+      rotateGeminiKey();
+    }
+  }
+  return null;
+}
+
+// 5. Single-Text Groq Fallback
 async function translateWithGroq(text) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return null;
@@ -104,7 +282,7 @@ async function translateWithGroq(text) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3
       })
@@ -120,7 +298,7 @@ async function translateWithGroq(text) {
   return null;
 }
 
-// 3. Robust Free Google Translate with Anti-Ban (Endpoint rotation, headers, caching, rate-limit backoff)
+// 6. Robust Free Google Translate with Anti-Ban (Endpoint rotation, headers, caching, rate-limit backoff)
 async function translateChunkWithGoogle(chunk, retry = 2) {
   const cacheKey = chunk.trim();
   if (translationCache.has(cacheKey)) {
@@ -156,11 +334,9 @@ async function translateChunkWithGoogle(chunk, retry = 2) {
           let translatedText = '';
           if (Array.isArray(data)) {
             if (Array.isArray(data[0])) {
-              // Format 1: dict-chrome-ex format [ [ 'translation', 'lang' ] ]
               if (typeof data[0][0] === 'string' && typeof data[0][1] === 'string' && data[0][1].length <= 5) {
                 translatedText = data.map(item => (Array.isArray(item) ? item[0] : item)).join('');
               } else {
-                // Format 2: gtx format [ [ ['seg1', 'orig1'], ['seg2', 'orig2'] ] ]
                 translatedText = data[0].map(item => (Array.isArray(item) ? item[0] : item)).join('');
               }
             } else if (typeof data[0] === 'string') {
@@ -182,7 +358,7 @@ async function translateChunkWithGoogle(chunk, retry = 2) {
           }
         }
       } catch (e) {
-        // continue to next endpoint
+        // continue
       }
     }
     if (attempt < retry) {
@@ -193,20 +369,19 @@ async function translateChunkWithGoogle(chunk, retry = 2) {
   return chunk;
 }
 
-// Master Translate Function:
-// Prioritizes AI (Gemini/Groq) first -> Safe Throttled Google fallback second
+// Master Translate Function (Single String)
 async function translateToKhmer(text) {
   if (!text || !text.trim()) return '';
 
-  // Priority 1: Gemini AI (1 request for entire video transcript, 0% ban risk)
+  // Priority 1: Gemini AI
   const geminiResult = await translateWithGemini(text);
   if (geminiResult) return geminiResult;
 
-  // Priority 2: Groq AI (1 request, 0% ban risk)
+  // Priority 2: Groq AI
   const groqResult = await translateWithGroq(text);
   if (groqResult) return groqResult;
 
-  // Priority 3: Safe Google Translate (batched up to 2000 chars + jitter delay + caching)
+  // Priority 3: Safe Google Translate (batched with delay)
   try {
     const maxLen = 2000;
     const chunks = [];
@@ -227,10 +402,8 @@ async function translateToKhmer(text) {
     for (let i = 0; i < chunks.length; i++) {
       const translatedChunk = await translateChunkWithGoogle(chunks[i]);
       result += (result ? ' ' : '') + translatedChunk;
-
-      // Polite delay between chunk requests to avoid IP rate-limiting
       if (i < chunks.length - 1) {
-        const delayMs = 600 + Math.floor(Math.random() * 500);
+        const delayMs = 500 + Math.floor(Math.random() * 400);
         await new Promise(r => setTimeout(r, delayMs));
       }
     }
@@ -358,21 +531,55 @@ async function synthesizeKhmerVoice(text, voiceGender, outputDir) {
   if (!loadEdgeTTS()) {
     throw new Error('កញ្ចប់ msedge-tts មិនទាន់ដំឡើងលើ VPS ទេ។ សូមវាយបញ្ជា "npm install" លើ VPS ជាមុនសិន!');
   }
-  const tts = new MsEdgeTTS();
   const voiceName = (voiceGender && voiceGender.includes('ស្រី'))
     ? 'km-KH-SreymomNeural'
     : 'km-KH-PisethNeural';
 
-  await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-  
   // Clean text of non-printable or unsupported control symbols
   const cleanText = (text || '').replace(/[\r\n]+/g, ' ').trim();
   if (!cleanText) {
     throw new Error('អត្ថបទសម្រាប់បញ្ចេញសំឡេងទទេ (Empty text for TTS)');
   }
 
-  const result = await tts.toFile(outputDir, cleanText);
-  return result.audioFilePath;
+  // If text is short/medium (<= 3500 chars), synthesize directly in 1 file
+  if (cleanText.length <= 3500) {
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    const result = await tts.toFile(outputDir, cleanText);
+    return result.audioFilePath;
+  }
+
+  // If text is long, chunk to prevent payload timeouts and concatenate with ffmpeg
+  console.log(`TTS script is long (${cleanText.length} chars). Synthesizing in chunks...`);
+  const sentences = cleanText.match(/[^.!?។\n]+[.!?។\n]+|[^.!?។\n]+$/g) || [cleanText];
+  const textChunks = [];
+  let curChunk = '';
+  for (const s of sentences) {
+    if ((curChunk + ' ' + s).length > 2500) {
+      if (curChunk) textChunks.push(curChunk.trim());
+      curChunk = s;
+    } else {
+      curChunk += (curChunk ? ' ' : '') + s;
+    }
+  }
+  if (curChunk) textChunks.push(curChunk.trim());
+
+  const audioPartPaths = [];
+  for (let i = 0; i < textChunks.length; i++) {
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    const partPath = path.join(outputDir, `tts_part_${i}.mp3`);
+    await tts.toFile(partPath, textChunks[i]);
+    audioPartPaths.push(partPath);
+  }
+
+  // Concat all mp3 parts with ffmpeg
+  const listFile = path.join(outputDir, 'tts_concat_list.txt');
+  const listContent = audioPartPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+  fs.writeFileSync(listFile, listContent);
+  const finalAudioPath = path.join(outputDir, 'voice_full.mp3');
+  await runCmd(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${finalAudioPath}"`);
+  return finalAudioPath;
 }
 
 // --- Helper: Parse & Convert SRT to Plain Text ---
@@ -506,21 +713,14 @@ async function processStoryVideo({
     const translatedSegments = [];
 
     if (hasSegments) {
-      console.log(`Processing ${transcription.segments.length} dialogue segments...`);
-      for (let i = 0; i < transcription.segments.length; i++) {
-        const seg = transcription.segments[i];
-        const segText = seg.text ? seg.text.trim() : '';
-        if (!segText) continue;
+      console.log(`Processing ${transcription.segments.length} dialogue segments with Batch AI Translation...`);
+      const validSegments = transcription.segments.filter(s => s && s.text && s.text.trim());
+      const translatedTexts = await batchTranslateSegments(validSegments, transcription.language);
 
-        let segKhmer = '';
-        if (transcription.language === 'km') {
-          segKhmer = segText;
-        } else {
-          segKhmer = await translateToKhmer(segText);
-        }
-
-        if (segKhmer && segKhmer.trim()) {
-          const cleanKhmer = segKhmer.trim();
+      for (let i = 0; i < validSegments.length; i++) {
+        const seg = validSegments[i];
+        const cleanKhmer = (translatedTexts[i] || seg.text).trim();
+        if (cleanKhmer) {
           translatedSegments.push(cleanKhmer);
           const startStr = formatSrtTime(Math.max(0, seg.start));
           const endStr = formatSrtTime(Math.max(seg.start + 0.5, seg.end));
