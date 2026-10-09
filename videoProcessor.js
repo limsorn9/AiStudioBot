@@ -242,12 +242,41 @@ async function translateToKhmer(text) {
   }
 }
 
-// --- Helper: Transcribe Audio using Groq, Gemini or Free Speech API ---
+// --- Helper: Transcribe Audio using Whisper AI, Groq or Gemini ---
 async function transcribeAudio(audioPath) {
-  const groqKey = process.env.GROQ_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
+  let whisperError = null;
 
-  // 1. Try Groq Whisper Large v3 (Fastest & high accuracy)
+  // 1. Priority: Local Whisper AI (Free, 100+ languages, sentence timestamps)
+  const pythonBins = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
+  const scriptPath = path.join(__dirname, 'transcribe_whisper.py');
+
+  for (const bin of pythonBins) {
+    try {
+      console.log(`Transcribing with Whisper AI (${bin})...`);
+      const { stdout } = await runCmd(`${bin} "${scriptPath}" "${audioPath}" tiny`);
+      const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const data = JSON.parse(jsonMatch[0]);
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        if (data && (data.text || (data.segments && data.segments.length > 0))) {
+          console.log(`Whisper transcribed ${data.segments?.length || 0} segments in language '${data.language}'`);
+          return {
+            text: (data.text || '').trim(),
+            segments: data.segments || [],
+            language: data.language || 'auto'
+          };
+        }
+      }
+    } catch (err) {
+      whisperError = err.message;
+      console.warn(`Whisper with ${bin} failed:`, err.message);
+    }
+  }
+
+  // 2. Groq Whisper API (if API key set)
+  const groqKey = process.env.GROQ_API_KEY;
   if (groqKey) {
     try {
       console.log('Transcribing with Groq Whisper API...');
@@ -270,23 +299,21 @@ async function transcribeAudio(audioPath) {
           segments: data.segments || [],
           language: data.language || 'auto'
         };
-      } else {
-        const errText = await res.text();
-        console.warn('Groq API Error response:', errText);
       }
     } catch (err) {
-      console.warn('Groq transcription failed, falling back:', err.message);
+      console.warn('Groq transcription failed:', err.message);
     }
   }
 
-  // 2. Try Gemini Flash Audio API
+  // 3. Gemini API (if API key set)
+  const geminiKey = process.env.GEMINI_API_KEY;
   if (geminiKey) {
     try {
       console.log('Transcribing with Gemini API...');
       const audioBuffer = fs.readFileSync(audioPath);
       const base64Audio = audioBuffer.toString('base64');
 
-      const prompt = `Please listen to this audio and provide the exact transcription text. If possible, translate it directly into Khmer sentences suitable for video dubbing.`;
+      const prompt = `Please transcribe this audio accurately. Output the full text.`;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
 
       const res = await fetch(url, {
@@ -316,11 +343,13 @@ async function transcribeAudio(audioPath) {
     }
   }
 
-  // 3. Fallback: Return placeholder indicating clean audio extraction
   return {
-    text: 'សាច់រឿងនៃវីដេអូត្រូវបានស្រង់ចេញ និងរៀបចំសម្រាប់ការបញ្ចូលសម្លេង',
+    text: '',
     segments: [],
-    language: 'km'
+    language: 'unknown',
+    error: whisperError
+      ? `Whisper Error: ${whisperError} (សូមប្រាកដថាបានដំឡើង openai-whisper លើ VPS: pip3 install openai-whisper --break-system-packages)`
+      : 'មិនអាចស្រង់សំឡេងបានទេ'
   };
 }
 
@@ -362,7 +391,21 @@ function srtToPlainText(srtContent) {
 
 // --- Helper: Build SRT from Text ---
 function buildSrtFromText(text, totalDuration = 60) {
-  const sentences = text.match(/[^.!?។]+[.!?។]+|[^.!?។]+$/g) || [text];
+  if (!text || !text.trim()) return '';
+  let sentences = text.match(/[^.!?។\n]+[.!?។\n]+|[^.!?។\n]+$/g) || [text];
+  sentences = sentences.map(s => s.trim()).filter(Boolean);
+
+  if (sentences.length === 1 && totalDuration > 6) {
+    const words = sentences[0].split(/\s+/);
+    if (words.length > 8) {
+      const chunkSize = Math.max(5, Math.ceil(words.length / Math.ceil(totalDuration / 4)));
+      sentences = [];
+      for (let i = 0; i < words.length; i += chunkSize) {
+        sentences.push(words.slice(i, i + chunkSize).join(' '));
+      }
+    }
+  }
+
   const chunkCount = Math.max(1, sentences.length);
   const timePerChunk = totalDuration / chunkCount;
 
@@ -370,7 +413,7 @@ function buildSrtFromText(text, totalDuration = 60) {
   for (let i = 0; i < chunkCount; i++) {
     const startSec = i * timePerChunk;
     const endSec = (i + 1) * timePerChunk;
-    srt += `${i + 1}\n${formatSrtTime(startSec)} --> ${formatSrtTime(endSec)}\n${sentences[i].trim()}\n\n`;
+    srt += `${i + 1}\n${formatSrtTime(startSec)} --> ${formatSrtTime(endSec)}\n${sentences[i]}\n\n`;
   }
   return srt;
 }
@@ -448,27 +491,67 @@ async function processStoryVideo({
     await runCmd(`ffmpeg -y -i "${inputVideoPath}" -vn -ar 16000 -ac 1 "${extractedAudioPath}"`);
 
     // 3. Transcribe & Translate into Khmer
-    await updateStatus(`🤖 ដំណាក់កាល 3/5: AI កំពុងស្ដាប់ និងបកប្រែជាភាសាខ្មែរ... [■■■■■■□□□□] 60%`);
+    await updateStatus(`🤖 ដំណាក់កាល 3/5: AI កំពុងស្ដាប់សាច់រឿង និងបកប្រែជាភាសាខ្មែរ... [■■■■■■□□□□] 60%`);
     const transcription = await transcribeAudio(extractedAudioPath);
-    let khmerText = '';
 
-    if (transcription.language === 'km') {
-      khmerText = transcription.text;
-    } else {
-      khmerText = await translateToKhmer(transcription.text);
+    const hasSegments = transcription.segments && transcription.segments.length > 0;
+    const hasText = transcription.text && transcription.text.trim().length > 0;
+
+    if (!hasSegments && !hasText) {
+      const errDetail = transcription.error || 'AI មិនអាចស្ដាប់ឮសំឡេងមនុស្សនិយាយនៅក្នុងវីដេអូនេះទេ!';
+      throw new Error(`មិនអាចស្រង់សំឡេងសន្ទនាបាន៖ ${errDetail}`);
     }
 
-    if (!khmerText || !khmerText.trim()) {
-      khmerText = 'សាច់រឿងនៃវីដេអូត្រូវបានសម្រួលបកប្រែជាភាសាខ្មែរដោយជោគជ័យ';
+    let srtContent = '';
+    const translatedSegments = [];
+
+    if (hasSegments) {
+      console.log(`Processing ${transcription.segments.length} dialogue segments...`);
+      for (let i = 0; i < transcription.segments.length; i++) {
+        const seg = transcription.segments[i];
+        const segText = seg.text ? seg.text.trim() : '';
+        if (!segText) continue;
+
+        let segKhmer = '';
+        if (transcription.language === 'km') {
+          segKhmer = segText;
+        } else {
+          segKhmer = await translateToKhmer(segText);
+        }
+
+        if (segKhmer && segKhmer.trim()) {
+          const cleanKhmer = segKhmer.trim();
+          translatedSegments.push(cleanKhmer);
+          const startStr = formatSrtTime(Math.max(0, seg.start));
+          const endStr = formatSrtTime(Math.max(seg.start + 0.5, seg.end));
+          srtContent += `${translatedSegments.length}\n${startStr} --> ${endStr}\n${cleanKhmer}\n\n`;
+        }
+      }
+    }
+
+    // Fallback if segments loop didn't yield anything but full text exists
+    if (translatedSegments.length === 0 && hasText) {
+      let fullKhmer = '';
+      if (transcription.language === 'km') {
+        fullKhmer = transcription.text.trim();
+      } else {
+        fullKhmer = await translateToKhmer(transcription.text.trim());
+      }
+      translatedSegments.push(fullKhmer);
+      srtContent = buildSrtFromText(fullKhmer, duration);
+    }
+
+    const fullKhmerText = translatedSegments.join(' ');
+    if (!fullKhmerText || !fullKhmerText.trim()) {
+      throw new Error('មិនអាចបកប្រែសាច់រឿងជាភាសាខ្មែរបានទេ!');
     }
 
     // Save Subtitle SRT
-    const srtContent = buildSrtFromText(khmerText, duration);
     fs.writeFileSync(srtPath, srtContent, 'utf-8');
 
     // 4. Synthesize Khmer Voice
     await updateStatus(`🔊 ដំណាក់កាល 4/5: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរ (TTS)... [■■■■■■■■□□] 80%`);
-    const voiceAudioPath = await synthesizeKhmerVoice(khmerText, voiceType, workDir);
+    const voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
 
     // 5. Duck & Dub with FFmpeg
     await updateStatus(`🎬 ដំណាក់កាល 5/5: កំពុង Render វីដេអូបកប្រែរួច (Ducking BGM)... [■■■■■■■■■□] 95%`);
