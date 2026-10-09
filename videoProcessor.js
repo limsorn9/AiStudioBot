@@ -230,12 +230,15 @@ async function batchTranslateSegments(segments, sourceLang) {
     const chunk = segments.slice(b, b + batchSize);
     const chunkTexts = chunk.map(s => s.text);
 
-    // 1. Try Gemini Batch (Consumes only 1 request per 25 lines!)
-    let translated = await batchTranslateWithGemini(chunkTexts);
-
-    // 2. Try Groq Batch (Free backup)
-    if (!translated) {
+    // 1. Try Groq Batch (Ultra-fast 0.8s, 14,400 free requests/day, zero quota lock)
+    let translated = null;
+    if (process.env.GROQ_API_KEY) {
       translated = await batchTranslateWithGroq(chunkTexts);
+    }
+
+    // 2. Try Gemini Batch
+    if (!translated && (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEYS)) {
+      translated = await batchTranslateWithGemini(chunkTexts);
     }
 
     // 3. Fallback: Translate individually with Google if both AI batches fail

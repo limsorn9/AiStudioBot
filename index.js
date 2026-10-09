@@ -80,7 +80,8 @@ const utilToolsMenu = Markup.keyboard([
 const storyToolsMenu = Markup.keyboard([
   ['💻 បកប្រែរឿង', '🎙️ SRT to Voice'],
   ['🤖 Transcript SRT', '🎙️ Clone សម្លេង'],
-  ['⬇️ ទាញយករឿង', '❌ ត្រឡប់ក្រោយ']
+  ['⬇️ ទាញយករឿង', '🔑 កំណត់ API Key'],
+  ['❌ ត្រឡប់ក្រោយ']
 ]).resize();
 
 // Keyboard សម្រាប់ Mode រង់ចាំ Upload (មានតែប៊ូតុងត្រឡប់ក្រោយ)
@@ -209,11 +210,15 @@ function getStoryTranslateDashboard(userId) {
   const state = getUserState(userId);
   const currentSplit = splitOptions[state.storySplitIndex];
   const splitBtnLabel = splitButtonLabels[state.storySplitIndex];
+  const hasGroq = Boolean(process.env.GROQ_API_KEY);
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEYS);
+  const keyStatus = hasGroq ? '⚡ Groq (Active)' : (hasGemini ? '🤖 Gemini (Active)' : '⚠️ មិនទាន់មាន (ចុចប៊ូតុងកំណត់)');
 
   const text = `📊 Dashboard: 🎬 បកប្រែរឿង
 [ 📦 ទំហំ: File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB) | 💰 តម្លៃ 1000 Credits / វីដេអូ ]
 
 🎞️ ការកំណត់កាត់ភាគ: ${currentSplit}
+🔑 ស្ថានភាព AI API Key: ${keyStatus}
 
 👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្តង់ដារ: សំឡេងប្រុស & ស្រី):`;
 
@@ -221,7 +226,37 @@ function getStoryTranslateDashboard(userId) {
     [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'story_voice_male')],
     [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'story_voice_female')],
     [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'story_voice_both')],
+    [Markup.button.callback('🔑 កំណត់ API Key (Groq / Gemini)', 'manage_api_keys')],
     [Markup.button.callback(splitBtnLabel, 'story_toggle_split')],
+    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
+  ]);
+
+  return { text, inlineKeyboard };
+}
+
+function getApiKeyDashboard() {
+  const groqStatus = process.env.GROQ_API_KEY ? '✅ បានភ្ជាប់ (Active)' : '❌ មិនទាន់មាន';
+  const geminiStatus = (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEYS) ? '✅ បានភ្ជាប់ (Active)' : '❌ មិនទាន់មាន';
+
+  const text = `🔑 **ការកំណត់ AI API Key សម្រាប់បកប្រែរឿង**
+
+⚡ **Groq AI (Llama 3.3 70B)**៖ ${groqStatus}
+• ល្បឿន៖ 0.8s (លឿនបំផុត)
+• កូតា៖ 14,400 Requests/ថ្ងៃ (Free ១០០% គ្មានបញ្ហា Quota)
+• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ស្វ័យប្រវត្តិច្បាស់ ១០០%
+
+🤖 **Google Gemini AI**៖ ${geminiStatus}
+• គុណភាព៖ បកប្រែរៀបរាប់មនោសញ្ចេតនាល្អ
+
+👉 សូមជ្រើសរើសប៊ូតុងខាងក្រោមដើម្បីបញ្ចូល ឬផ្លាស់ប្តូរ Key៖`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('⚡ បញ្ចូល Groq Key (Free / ណែនាំ)', 'input_groq_key')],
+    [Markup.button.callback('🤖 បញ្ចូល Gemini Key', 'input_gemini_key')],
+    [
+      Markup.button.url('🔗 យក Groq Key (Free)', 'https://console.groq.com/keys'),
+      Markup.button.url('🔗 យក Gemini Key', 'https://aistudio.google.com')
+    ],
     [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
   ]);
 
@@ -558,6 +593,52 @@ bot.action(['story_back_to_menu', 'story_cancel_task'], async (ctx) => {
   ctx.reply('ត្រឡប់មកកាន់ Tools សម្រាប់រឿងវិញ...', storyToolsMenu);
 });
 
+// --- 🔑 កំណត់ API Key Handler ---
+bot.hears('🔑 កំណត់ API Key', (ctx) => {
+  const { text, inlineKeyboard } = getApiKeyDashboard();
+  ctx.reply(text, inlineKeyboard);
+});
+
+bot.action('manage_api_keys', async (ctx) => {
+  const { text, inlineKeyboard } = getApiKeyDashboard();
+  try {
+    await ctx.editMessageText(text, inlineKeyboard);
+    await ctx.answerCbQuery();
+  } catch (e) {
+    ctx.reply(text, inlineKeyboard);
+  }
+});
+
+bot.action('input_groq_key', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = 'waiting_groq_key';
+  await ctx.answerCbQuery();
+  const text = `⚡ **បញ្ចូល Groq API Key (Free ១០០%)**
+
+👉 សូម Copy និងផ្ញើ Key របស់អ្នក (ផ្ដើមដោយ \`gsk_...\`) មកកាន់ Bot ក្នុង Chat នេះ៖
+
+💡 បើមិនទាន់មាន Key ទេ សូមចុចយកឥតគិតថ្លៃ (10 វិនាទី)៖
+https://console.groq.com/keys`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
+bot.action('input_gemini_key', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = 'waiting_gemini_key';
+  await ctx.answerCbQuery();
+  const text = `🤖 **បញ្ចូល Gemini API Key**
+
+👉 សូម Copy និងផ្ញើ Key របស់អ្នក (ផ្ដើមដោយ \`AIzaSy...\`) មកកាន់ Bot ក្នុង Chat នេះ៖
+
+💡 យក Key ឥតគិតថ្លៃនៅទីនេះ៖
+https://aistudio.google.com`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
 // --- 2. 🎙️ SRT to Voice ---
 bot.hears('🎙️ SRT to Voice', (ctx) => {
   const { text, inlineKeyboard } = getSrtToVoiceDashboard();
@@ -740,6 +821,41 @@ bot.on('text', async (ctx) => {
       [Markup.button.callback('🤖 ស្រង់ Subtitle SRT (Gemini)', 'quick_transcript')],
       [Markup.button.callback('⬇️ ទាញយកវីដេអូ HD/4K', 'quick_download')]
     ]));
+  }
+
+  // Handle API key input (by mode or auto-detected by prefix gsk_ or AIzaSy)
+  const trimmed = text.trim();
+  if (state.currentMode === 'waiting_groq_key' || state.currentMode === 'waiting_gemini_key' || trimmed.startsWith('gsk_') || trimmed.startsWith('AIzaSy')) {
+    const isGroq = trimmed.startsWith('gsk_') || state.currentMode === 'waiting_groq_key';
+    const keyName = isGroq ? 'GROQ_API_KEY' : 'GEMINI_API_KEY';
+
+    process.env[keyName] = trimmed;
+    if (isGroq) {
+      process.env.GROQ_API_KEY = trimmed;
+    } else {
+      process.env.GEMINI_API_KEY = trimmed;
+      process.env.GEMINI_API_KEYS = trimmed;
+    }
+
+    try {
+      const envPath = path.join(__dirname, '.env');
+      let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+      if (envContent.includes(`${keyName}=`)) {
+        envContent = envContent.replace(new RegExp(`${keyName}=.*`), `${keyName}=${trimmed}`);
+      } else {
+        envContent += `\n${keyName}=${trimmed}\n`;
+      }
+      fs.writeFileSync(envPath, envContent, 'utf-8');
+    } catch (e) {
+      console.error('Save env error:', e);
+    }
+
+    state.currentMode = null;
+    if (isGroq) {
+      return ctx.reply(`⚡ **បានកំណត់ Groq AI Key (Llama 3.3 70B) ជោគជ័យ!** 🎉\n• ល្បឿន៖ 0.8 វិនាទី (លឿនបំផុត)\n• កូតា៖ 14,400 Requests/ថ្ងៃ (Free ១០០% គ្មានបញ្ហា Quota)\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិច្បាស់ ១០០%!\n\n👉 ឥឡូវលោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
+    } else {
+      return ctx.reply(`✅ **បានកំណត់ Gemini API Key ជោគជ័យ!** 🎉\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិ!\n\n👉 ឥឡូវលោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
+    }
   }
 
   // Fallback for regular text
