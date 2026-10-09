@@ -1016,9 +1016,11 @@ async function processStoryVideo({
       const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
       const caption = `🎉 បកប្រែរឿងរួចរាល់${partLabel} (Quality 720p HD)! ✨\n🎙️ សម្លេង៖ ${voiceType} | 📺 កម្រិតរូបភាព៖ 720p HD | 📦 ទំហំ៖ ${sizeMb}MB\n⏱️ រយៈពេល៖ ~${Math.round(duration)} វិនាទី\n💎 ផលិតដោយ៖ @AiStudioSSOnline_bot`;
       
-      // If video < 50MB send as video, else send as document
-      if (stat.size < 49 * 1024 * 1024) {
-        await ctx.replyWithVideo({ source: part.path }, { caption });
+      // If on Local Bot API, we can send up to 2GB video with streaming; otherwise standard Telegram 50MB limit applies
+      const isLocalApi = process.env.BOT_API_ROOT || (process.env.LOCAL_BOT_API === 'true');
+      const maxVideoSendSize = isLocalApi ? 1999 * 1024 * 1024 : 49 * 1024 * 1024;
+      if (stat.size < maxVideoSendSize) {
+        await ctx.replyWithVideo({ source: part.path }, { caption, supports_streaming: true });
       } else {
         await ctx.replyWithDocument({ source: part.path, filename: `Story_Part_${part.partNumber}.mp4` }, { caption });
       }
