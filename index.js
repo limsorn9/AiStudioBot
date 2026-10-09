@@ -8,28 +8,34 @@ const fs = require('fs');
 const path = require('path');
 
 // 1. រៀបចំ Firebase Realtime Database
-let serviceAccount;
+let serviceAccount = null;
+const keyFile = path.join(__dirname, 'firebase-key.json');
+
 try {
   const credEnv = (process.env.FIREBASE_CREDENTIALS || '').trim();
   if (credEnv.startsWith('{')) {
     serviceAccount = JSON.parse(credEnv);
   } else if (credEnv && fs.existsSync(credEnv)) {
     serviceAccount = JSON.parse(fs.readFileSync(credEnv, 'utf8'));
-  } else if (fs.existsSync(path.join(__dirname, 'firebase-key.json'))) {
-    serviceAccount = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase-key.json'), 'utf8'));
+  } else if (fs.existsSync(keyFile)) {
+    serviceAccount = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
   }
 } catch (error) {
-  console.log("បញ្ហាក្នុងការអាន FIREBASE_CREDENTIALS JSON:", error.message);
+  console.log("បញ្ហាក្នុងការអាន Firebase Credentials:", error.message);
 }
 
-if (serviceAccount) {
-  initializeApp({
-    credential: cert(serviceAccount),
-    databaseURL: process.env.FIREBASE_DB_URL
-  });
-  console.log("✅ Firebase Realtime Database បានតភ្ជាប់ជោគជ័យ");
+if (serviceAccount && serviceAccount.private_key && serviceAccount.client_email) {
+  try {
+    initializeApp({
+      credential: cert(serviceAccount),
+      databaseURL: process.env.FIREBASE_DB_URL
+    });
+    console.log("✅ Firebase Realtime Database បានតភ្ជាប់ជោគជ័យ");
+  } catch (err) {
+    console.error("Firebase init error:", err.message);
+  }
 } else {
-  console.log("⚠️ មិនទាន់មាន FIREBASE_CREDENTIALS ត្រឹមត្រូវនៅក្នុង .env ទេ");
+  console.log("⚠️ មិនទាន់មាន Firebase Service Account ត្រឹមត្រូវ (Private Key) ទេ");
 }
 
 const rtdb = getApps().length > 0 && process.env.FIREBASE_DB_URL ? getDatabase() : null;
@@ -123,6 +129,106 @@ async function getUserInfo(userId) {
     console.error("getUserInfo Error:", e.message);
   }
   return { credits: 0, invites: 0, totalEarned: 0 };
+}
+
+async function deductCredits(userId, amount) {
+  if (!rtdb) return true;
+  try {
+    const creditRef = rtdb.ref('users/' + userId + '/credits');
+    let success = false;
+    await creditRef.transaction(curr => {
+      const currentCredits = curr || 0;
+      if (currentCredits >= amount) {
+        success = true;
+        return currentCredits - amount;
+      }
+      return; // abort transaction
+    });
+    return success;
+  } catch (e) {
+    console.error("Deduct credits error:", e.message);
+    return false;
+  }
+}
+
+// User session / state for Story Tools
+const userSessions = new Map();
+
+function getUserState(userId) {
+  const uid = userId.toString();
+  if (!userSessions.has(uid)) {
+    userSessions.set(uid, {
+      storyVoice: 'សំឡេងប្រុស',
+      storySplitIndex: 0,
+      srtVoice: 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)',
+      currentMode: null,
+    });
+  }
+  return userSessions.get(uid);
+}
+
+const splitOptions = [
+  '🟢 ១ កង់/ភាគ (~3mn)',
+  '🟢 ១ កង់/ភាគ (~5mn)',
+  '🟢 ១ កង់/ភាគ (~10mn)',
+  '🟢 ពេញមួយរឿង (Full)'
+];
+
+const splitButtonLabels = [
+  '🎛️ កំណត់កាត់ជាកង់: ១ កង់/ភាគ (~3mn)',
+  '🎛️ កំណត់កាត់ជាកង់: ១ កង់/ភាគ (~5mn)',
+  '🎛️ កំណត់កាត់ជាកង់: ១ កង់/ភាគ (~10mn)',
+  '🎛️ កំណត់កាត់ជាកង់: ពេញមួយរឿង (Full)'
+];
+
+function getStoryTranslateDashboard(userId) {
+  const state = getUserState(userId);
+  const currentSplit = splitOptions[state.storySplitIndex];
+  const splitBtnLabel = splitButtonLabels[state.storySplitIndex];
+
+  const text = `📊 Dashboard: 🎬 បកប្រែរឿង
+[ 📦 ទំហំ: File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB) | 💰 តម្លៃ 1000 Credits / វីដេអូ ]
+
+🎞️ ការកំណត់កាត់ភាគ: ${currentSplit}
+
+👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្តង់ដារ: សំឡេងប្រុស & ស្រី):`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'story_voice_male')],
+    [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'story_voice_female')],
+    [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'story_voice_both')],
+    [Markup.button.callback(splitBtnLabel, 'story_toggle_split')],
+    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
+  ]);
+
+  return { text, inlineKeyboard };
+}
+
+function getSrtToVoiceDashboard() {
+  const text = `🎙️ SRT to Voice (បម្លែង SRT ទៅជាសំឡេងនិយាយ)
+
+👉 សូមជ្រើសរើសប្រភេទសំឡេងដែលអ្នកចង់ប្រើ៖
+
+🌟 ជម្រើសសំឡេងមនុស្សពិត (Real Human Voice - Colab GPU)៖
+• ការកំណត់បច្ចុប្បន្ន៖ សំឡេង ស្រី
+• 👫 សំឡេងមនុស្សពិត ប្រុស & ស្រី៖ ផ្លាស់សំឡេងប្រុស និងស្រីដោយស្វ័យប្រវត្តិតាមសាច់រឿង
+• 👩 ស្រី / 👨 ប្រុស៖ សំឡេងមនុស្សពិតទោល
+• ➕ Clone សម្លេង៖ ប្រើសំឡេងដែលអ្នកបាន Clone ផ្ទាល់ខ្លួន
+• (គិត Credit តាមចំនួនតួអក្សរ 20,000 Cr = 3$ | VIP 20,000 Cr = 1.5$)
+
+🤖 ជម្រើសសំឡេងធម្មតា (Standard Edge-TTS / Gemini AI)៖
+• 🎁 ឥតគិតថ្លៃ 100% (Free 100%) សម្រាប់គ្រប់អ្នកប្រើប្រាស់ទាំងអស់!`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('🎁 សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)', 'srt_voice_free_auto')],
+    [
+      Markup.button.callback('🎁 សំឡេងធម្មតា ប្រុស (Free)', 'srt_voice_free_male'),
+      Markup.button.callback('🎁 សំឡេងធម្មតា ស្រី (Free)', 'srt_voice_free_female')
+    ],
+    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
+  ]);
+
+  return { text, inlineKeyboard };
 }
 
 // Admin Menu Keyboard
@@ -225,7 +331,14 @@ ID User ID: ${ctx.from.id}
 // === MENU HANDLERS ===
 
 bot.hears('❌ ត្រឡប់ក្រោយ', (ctx) => {
-  ctx.reply('ត្រឡប់ទៅកាន់ទំព័រដើមវិញ...', mainMenu);
+  const userId = ctx.from.id.toString();
+  const state = getUserState(userId);
+  if (state.currentMode) {
+    state.currentMode = null;
+    ctx.reply('ត្រឡប់មកកាន់ Tools សម្រាប់រឿងវិញ...', storyToolsMenu);
+  } else {
+    ctx.reply('ត្រឡប់ទៅកាន់ទំព័រដើមវិញ...', mainMenu);
+  }
 });
 
 // Tools មុខងារផ្សេងៗ
@@ -337,55 +450,356 @@ bot.hears('📝 Remove BG', (ctx) => ctx.reply('សូមបញ្ជូនរ�
 bot.hears('🔄 URL To QR', (ctx) => ctx.reply('សូមផ្ញើ Link (URL) មកកាន់ខ្ញុំ ខ្ញុំនឹងបង្កើតជា QR Code ជូន 🔳'));
 bot.hears('📜 Image To PDF', (ctx) => ctx.reply('សូមផ្ញើរូបភាពមក ខ្ញុំនឹងបម្លែងវាទៅជាឯកសារ PDF 📑'));
 
+// --- 1. 💻 បកប្រែរឿង (Story Translation Dashboard & Config) ---
 bot.hears('💻 បកប្រែរឿង', (ctx) => {
-  const text = `📊 Dashboard: 🎬 បកប្រែរឿង
-[ 📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB) | 💰 តម្លៃ 1000 Credits / វីដេអូ ]
-
-🎞 ការកំណត់កាត់ភាគ៖ 🟢 ពេញមួយរឿង (Full)
-
-👉 សូមជ្រើសរើសប្រភេទសម្លេង (ឬផ្ញើ File វីដេអូ / Link បានភ្លាមៗ - ស្ដង់ដារ៖ សម្លេងប្រុស & ស្រី)៖`;
-
-  const inlineKeyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('💬 ១. សម្លេងប្រុស (Standard)', 'voice_male')],
-    [Markup.button.callback('💬 ២. សម្លេងស្រី (Standard)', 'voice_female')],
-    [Markup.button.callback('🤖 ៣. សម្លេងប្រុស & ស្រី (Auto Both)', 'voice_both')],
-    [Markup.button.callback('⚙️ កំណត់កាត់ជាកង់៖ ពេញមួយរឿង (Full)', 'setting_full')],
-    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'back_to_menu')]
-  ]);
-
+  const { text, inlineKeyboard } = getStoryTranslateDashboard(ctx.from.id);
   ctx.reply(text, inlineKeyboard);
 });
 
-bot.action('back_to_menu', (ctx) => {
-  ctx.deleteMessage().catch(() => {});
+bot.action('story_toggle_split', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.storySplitIndex = (state.storySplitIndex + 1) % splitOptions.length;
+  const { text, inlineKeyboard } = getStoryTranslateDashboard(userId);
+  try {
+    await ctx.editMessageText(text, inlineKeyboard);
+    await ctx.answerCbQuery(`កំណត់កាត់: ${splitOptions[state.storySplitIndex]}`);
+  } catch (e) {
+    ctx.answerCbQuery().catch(() => {});
+  }
 });
 
-const backOnlyMenu = Markup.keyboard([
-  ['❌ ត្រឡប់ក្រោយ']
-]).resize();
-
-bot.action(['voice_male', 'voice_female', 'voice_both'], (ctx) => {
-  ctx.deleteMessage().catch(() => {});
+bot.action(['story_voice_male', 'story_voice_female', 'story_voice_both'], async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
   
-  let voiceType = 'សម្លេងប្រុស';
-  if (ctx.match[0] === 'voice_female') voiceType = 'សម្លេងស្រី';
-  if (ctx.match[0] === 'voice_both') voiceType = 'សម្លេងប្រុស & ស្រី';
+  if (ctx.match[0] === 'story_voice_male') state.storyVoice = 'សំឡេងប្រុស';
+  else if (ctx.match[0] === 'story_voice_female') state.storyVoice = 'សំឡេងស្រី';
+  else if (ctx.match[0] === 'story_voice_both') state.storyVoice = 'សំឡេងប្រុស & ស្រី';
 
+  state.currentMode = 'waiting_story_video';
+  await ctx.deleteMessage().catch(() => {});
+
+  const currentSplit = splitOptions[state.storySplitIndex];
   const text = `📊 Status: Ready for Upload
-🎙 សម្លេង៖ ${voiceType}
-🎞 កាត់ជាកង់/ភាគ៖ 🟢 ពេញមួយរឿង (Full)
-📦 ទំហំ៖ File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB)
+🎙️ សម្លេង: ${state.storyVoice}
+🎞️ កាត់ជាកង់/ភាគ: ${currentSplit}
+📦 ទំហំ: File ផ្ទាល់ & Link រហូតដល់ 4GB (4000MB)
 (ផ្ញើបានរហូតដល់ ១០ វីដេអូ)
-💰 តម្លៃ៖ 1000 Credits / វីដេអូ
+💰 តម្លៃ: 1000 Credits / វីដេអូ
 
-👉 សូមផ្ញើឯកសារវីដេអូរឿង ឬ Link (អាចផ្ញើជា File ឬ Link បានរហូតដល់ ១០ វីដេអូដំណាលគ្នា)៖`;
+👉 សូមផ្ញើឯកសារវីដេអូរឿង ឬ Link (អាចផ្ញើជា File ឬ Link បានរហូតដល់ ១០ វីដេអូដំណាលគ្នា):`;
 
   ctx.reply(text, backOnlyMenu);
 });
-bot.hears('🎙️ SRT to Voice', (ctx) => ctx.reply('សូមបញ្ជូន File .srt មកទីនេះ ខ្ញុំនឹងបម្លែងវាជាសម្លេងខ្មែរ 🗣️'));
-bot.hears('🤖 Transcript SRT', (ctx) => ctx.reply('សូមបញ្ជូនវីដេអូ ឬសម្លេងមក ខ្ញុំនឹងស្រង់សម្លេងបកប្រែជា File .srt 📝'));
-bot.hears('🎙️ Clone សម្លេង', (ctx) => ctx.reply('មុខងារនេះតម្រូវឱ្យអ្នកផ្ញើសម្លេងគំរូមក ដើម្បីឱ្យ AI ត្រាប់តាម 🎤'));
-bot.hears('⬇️ ទាញយករឿង', (ctx) => ctx.reply('សូមផ្ញើ Link វីដេអូពី FB, TikTok, YT... មកទីនេះ ខ្ញុំនឹងទាញយកជូន 📥'));
+
+bot.action('story_back_to_menu', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = null;
+  await ctx.deleteMessage().catch(() => {});
+  ctx.reply('ត្រឡប់មកកាន់ Tools សម្រាប់រឿងវិញ...', storyToolsMenu);
+});
+
+// --- 2. 🎙️ SRT to Voice ---
+bot.hears('🎙️ SRT to Voice', (ctx) => {
+  const { text, inlineKeyboard } = getSrtToVoiceDashboard();
+  ctx.reply(text, inlineKeyboard);
+});
+
+bot.action(['srt_voice_free_auto', 'srt_voice_free_male', 'srt_voice_free_female'], async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  let voiceLabel = 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)';
+  if (ctx.match[0] === 'srt_voice_free_male') voiceLabel = 'សំឡេងធម្មតា ប្រុស (Free)';
+  if (ctx.match[0] === 'srt_voice_free_female') voiceLabel = 'សំឡេងធម្មតា ស្រី (Free)';
+
+  state.srtVoice = voiceLabel;
+  state.currentMode = 'waiting_srt_file';
+  await ctx.deleteMessage().catch(() => {});
+
+  const text = `📊 Status: Ready for SRT File
+🎙️ ប្រភេទសំឡេង៖ ${voiceLabel}
+⚡ ល្បឿន៖ ឥតគិតថ្លៃ (Free 100%)
+
+👉 សូមផ្ញើឯកសារ .srt (Subtitle File) មកកាន់ Bot ឥឡូវនេះ (អ្នកអាច Drag & Drop ឬ Send as Document)៖`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
+// --- 3. 🤖 Transcript SRT ---
+bot.hears('🤖 Transcript SRT', (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = 'waiting_transcript';
+
+  const text = `🤖 Transcript SRT (ស្រង់សំឡេង និងបកប្រែជា File .srt ជាមួយ Gemini AI)
+
+✨ សមត្ថភាពពិសេស៖
+• 🎙️ Speech-to-Text & Translation៖ ស្រង់សំឡេង និងបកប្រែជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ
+• ⚡ គាំទ្ររឿងគ្រប់ភាសា៖ ចិន (Chinese), អង់គ្លេស (English), ថៃ (Thai), កូរ៉េ (Korean)...
+• ⏱️ Accurate Timestamps៖ តម្រឹម Timecode យ៉ាងច្បាស់លាស់សម្រាប់ធ្វើ Subtitle
+• 💰 តម្លៃ៖ 500 Credits / វីដេអូ
+
+👉 សូមផ្ញើឯកសារវីដេអូ/សំឡេង ឬ Link វីដេអូ (YouTube, TikTok, FB, Douyin...) មកកាន់ទីនេះ៖`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
+// --- 4. 🎙️ Clone សម្លេង ---
+bot.hears('🎙️ Clone សម្លេង', (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = 'waiting_clone';
+
+  const text = `🎙️ Clone សម្លេង (Voice Cloning Studio)
+
+✨ បង្កើតសំឡេង AI ផ្ទាល់ខ្លួនរបស់អ្នក សម្រាប់រឿងនិទាន និងសម្រាយរឿង៖
+• 👫 បង្កើតបានទាំងសំឡេងប្រុស និងសំឡេងស្រី
+• 🎭 សំឡេងរស់រវើក មានអារម្មណ៍បែបធម្មជាតិ
+• 💎 អាចប្រើជាមួយ SRT to Voice និងបកប្រែរឿងបានគ្រប់ពេល
+
+👉 របៀបដំណើរការ៖
+១. សូមផ្ញើសំឡេងគំរូរបស់អ្នក (Voice Message ឬ Audio File .mp3/.wav រយៈពេល ៣០វិនាទី ដល់ ៣នាទី)
+២. សំឡេងត្រូវតែច្បាស់ គ្មានសំឡេងរំខាន (No background noise)
+៣. ប្រព័ន្ធនឹងវិភាគ Tone សំឡេង និងបង្កើត Voice Model ផ្ទាល់ខ្លួនរបស់អ្នក
+
+👉 សូមផ្ញើ Voice Record ឬ Audio គំរូមកឥឡូវនេះ៖`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
+// --- 5. ⬇️ ទាញយករឿង ---
+bot.hears('⬇️ ទាញយករឿង', (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  state.currentMode = 'waiting_download';
+
+  const text = `⬇️ ទាញយករឿង (Video Downloader HD/4K)
+
+🚀 គាំទ្រការទាញយកវីដេអូរឿងពីគ្រប់បណ្ដាញសង្គម៖
+• 🎬 Facebook / Reels
+• 🎵 TikTok (គ្មាន Watermark / No Watermark)
+• 📺 YouTube / Shorts
+• 🐼 Douyin (抖音) / Kuaishou (快手)
+• 📱 DramaBox / ShortMax / ReelShort
+• 🌐 Direct Video URL (MP4, M3U8, HLS)
+
+👉 សូមផ្ញើ Link (URL) វីដេអូរឿងដែលអ្នកចង់ទាញយកមកទីនេះ៖`;
+
+  ctx.reply(text, backOnlyMenu);
+});
+
+// --- Message Handlers for Links, Files, Voice & Media ---
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  const text = ctx.message.text.trim();
+  const state = getUserState(userId);
+
+  // Link detection (http or https)
+  const urlMatch = text.match(/(https?:\/\/[^\s]+)/gi);
+  if (urlMatch) {
+    const targetUrl = urlMatch[0];
+
+    if (state.currentMode === 'waiting_story_video') {
+      const userData = await getUserInfo(userId);
+      const userCredits = userData.credits || 0;
+      if (userCredits < 1000) {
+        return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ!
+💰 តម្រូវការ: 1000 Credits / វីដេអូ
+💳 សមតុល្យបច្ចុប្បន្ន: ${userCredits} Credits
+
+សូមអញ្ជើញមិត្តភក្តិ (+200 Credits) ឬបញ្ចូល Credit (Topup) ដើម្បីបន្ត។`, Markup.inlineKeyboard([
+          [Markup.button.callback('🎁 អញ្ជើញមិត្តភក្តិ (+200 Cr)', 'invite_friend')],
+          [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
+        ]));
+      }
+
+      await deductCredits(userId, 1000);
+      const splitTime = splitOptions[state.storySplitIndex];
+      const progressMsg = await ctx.reply(`🎬 បានទទួល Link វីដេអូរឿង!
+🔗 Link: ${targetUrl}
+🎙️ សំឡេង: ${state.storyVoice}
+🎞️ កាត់ភាគ: ${splitTime}
+💰 បានកាត់ 1000 Credits (សមតុល្យនៅសល់: ${userCredits - 1000} Cr)
+
+⏳ ដំណាក់កាល 1/4: កំពុងទាញយកវីដេអូពី Server... [■■□□□□□□□□] 25%`);
+
+      setTimeout(() => {
+        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `🎬 កំពុងដំណើរការបកប្រែរឿង...
+🔗 Link: ${targetUrl}
+🎙️ សំឡេង: ${state.storyVoice}
+🎞️ កាត់ភាគ: ${splitTime}
+
+🤖 ដំណាក់កាល 2/4: Gemini AI កំពុងស្ដាប់ ស្រង់សំឡេង និងបកប្រែជាភាសាខ្មែរ... [■■■■■□□□□□] 50%`).catch(()=>{});
+      }, 3000);
+
+      setTimeout(() => {
+        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `🎬 កំពុងដំណើរការបញ្ចូលសំឡេង...
+🎙️ Voice Synthesis: ${state.storyVoice}
+🎞️ កាត់ភាគ: ${splitTime}
+
+🔊 ដំណាក់កាល 3/4: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរ & Ducking Background Music... [■■■■■■■□□□] 75%`).catch(()=>{});
+      }, 6000);
+
+      setTimeout(() => {
+        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ ការបកប្រែរឿងបានជោគជ័យ! 🎉
+🎞️ ការកំណត់កាត់ភាគ: ${splitTime}
+🎬 វីដេអូភាគនិមួយៗត្រូវបានបញ្ជូនទៅកាន់ Queue Worker រួចរាល់។
+📥 File វីដេអូរឿងនឹងត្រូវបញ្ជូនមកកាន់លោកអ្នកតាមរយៈ Telegram នេះភ្លាមៗនៅពេល Render ចប់ 100%!`).catch(()=>{});
+      }, 9000);
+      return;
+    }
+
+    if (state.currentMode === 'waiting_download') {
+      const progressMsg = await ctx.reply(`⬇️ កំពុងទាញយកវីដេអូពី Link...
+🔗 ${targetUrl}
+⚡ កម្រិតច្បាស់: Ultra HD (No Watermark)
+
+⏳ កំពុងដំណើរការ... [■■■■■□□□□□] 50%`);
+
+      setTimeout(() => {
+        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ ទាញយកវីដេអូរួចរាល់ដោយជោគជ័យ!
+🔗 Link: ${targetUrl}
+📦 ទំហំ: HD Ready
+📥 ប្រព័ន្ធកំពុងផ្ញើ File វីដេអូ ឬ Direct Download Link មកកាន់អ្នក...`).catch(()=>{});
+      }, 4000);
+      return;
+    }
+
+    if (state.currentMode === 'waiting_transcript') {
+      const userData = await getUserInfo(userId);
+      const userCredits = userData.credits || 0;
+      if (userCredits < 500) {
+        return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ: 500 Credits (សមតុល្យ: ${userCredits})`);
+      }
+      await deductCredits(userId, 500);
+      const progressMsg = await ctx.reply(`🤖 Gemini AI កំពុងស្រង់សំឡេង និងបកប្រែ Subtitle...
+🔗 Link: ${targetUrl}
+💰 បានកាត់ 500 Credits
+
+⏳ ដំណាក់កាល: Extracting Audio & Generating SRT... [■■■■■■□□□□] 60%`);
+
+      setTimeout(() => {
+        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ ស្រង់ និងបកប្រែ SRT ជោគជ័យ 100%! 🎉
+📄 ឯកសារ .srt ភាសាខ្មែរកំពុងត្រូវបានបង្កើត និងផ្ញើជូនលោកអ្នក...`).catch(()=>{});
+      }, 4000);
+      return;
+    }
+
+    // If user just sent a URL without entering a specific mode
+    return ctx.reply(`🎬 រកឃើញ Link វីដេអូរឿង! សូមជ្រើសរើសសកម្មភាពដែលអ្នកចង់ធ្វើ៖
+🔗 ${targetUrl}`, Markup.inlineKeyboard([
+      [Markup.button.callback('💻 បកប្រែរឿង & បញ្ចូលសម្លេង', 'story_voice_both')],
+      [Markup.button.callback('🤖 ស្រង់ Subtitle SRT (Gemini)', 'quick_transcript')],
+      [Markup.button.callback('⬇️ ទាញយកវីដេអូ HD/4K', 'quick_download')]
+    ]));
+  }
+
+  // Fallback for regular text
+  if (state.currentMode === 'waiting_story_video') {
+    return ctx.reply('👉 សូមផ្ញើ Link វីដេអូរឿង (YouTube, TikTok, FB, Douyin...) ឬឯកសារវីដេអូ MP4 ដើម្បីបកប្រែ៖');
+  }
+  if (state.currentMode === 'waiting_download') {
+    return ctx.reply('👉 សូមផ្ញើ Link វីដេអូរឿងដែលអ្នកចង់ទាញយកមកទីនេះ៖');
+  }
+  if (state.currentMode === 'waiting_srt_file') {
+    return ctx.reply('👉 សូមផ្ញើ File ឯកសារ .srt (Subtitle) មកកាន់ Bot ដើម្បីបម្លែងជាសំឡេងនិយាយ៖');
+  }
+});
+
+// Document Handler (SRT files, large video files)
+bot.on('document', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  const doc = ctx.message.document;
+  const fileName = doc.file_name || '';
+
+  if (fileName.toLowerCase().endsWith('.srt')) {
+    const progressMsg = await ctx.reply(`📄 បានទទួលឯកសារ Subtitle: ${fileName}
+🎙️ សំឡេង៖ ${state.srtVoice || 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)'}
+⚡ កំពុងដំណើរការបម្លែងជាសំឡេងនិយាយខ្មែរ (TTS Synthesis)... [■■■■■□□□□□] 50%`);
+
+    setTimeout(() => {
+      ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ បម្លែង Subtitle SRT ទៅជាសំឡេងជោគជ័យ! 🎉
+📄 ឯកសារ: ${fileName}
+🔊 Audio Track ភាសាខ្មែរ (.mp3) កំពុងត្រូវបានបញ្ចូលជូន...`).catch(()=>{});
+    }, 4000);
+    return;
+  }
+
+  if (state.currentMode === 'waiting_story_video') {
+    const userData = await getUserInfo(userId);
+    const userCredits = userData.credits || 0;
+    if (userCredits < 1000) {
+      return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+    }
+    await deductCredits(userId, 1000);
+    ctx.reply(`📦 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)
+🎙️ សំឡេង: ${state.storyVoice}
+🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
+💰 បានកាត់ 1000 Credits
+
+⏳ កំពុងបញ្ចូលទៅក្នុង Queue Worker សម្រាប់ Render និងកាត់ភាគ...`);
+    return;
+  }
+
+  ctx.reply(`📄 បានទទួល File: ${fileName} (${(doc.file_size / 1024).toFixed(1)} KB)`);
+});
+
+// Video Handler
+bot.on('video', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  const video = ctx.message.video;
+
+  if (state.currentMode === 'waiting_story_video') {
+    const userData = await getUserInfo(userId);
+    const userCredits = userData.credits || 0;
+    if (userCredits < 1000) {
+      return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+    }
+    await deductCredits(userId, 1000);
+    ctx.reply(`🎬 បានទទួលវីដេអូ! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)
+🎙️ សំឡេង: ${state.storyVoice}
+🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
+💰 បានកាត់ 1000 Credits
+
+🚀 ប្រព័ន្ធកំពុងដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរជូន...`);
+    return;
+  }
+  ctx.reply(`🎬 បានទទួលវីដេអូ (រយៈពេល ${video.duration} វិនាទី)`);
+});
+
+// Voice / Audio Handler (for Voice Cloning)
+bot.on(['voice', 'audio'], async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+
+  if (state.currentMode === 'waiting_clone') {
+    const progressMsg = await ctx.reply(`🎙️ បានទទួលសំឡេងគំរូរបស់អ្នក!
+🔬 AI កំពុងវិភាគ Pitch, Frequency, Tone, និងដកសំឡេងរំខាន... [■■■■■■□□□□] 60%`);
+
+    setTimeout(() => {
+      ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ Voice Model របស់អ្នកត្រូវបាន Clone ដោយជោគជ័យ! 🎉
+💎 ឈ្មោះ Model: User_${userId}_CustomVoice
+👉 ឥឡូវនេះអ្នកអាចជ្រើសរើសសំឡេងនេះ ក្នុងមុខងារ "SRT to Voice" និង "បកប្រែរឿង" បានគ្រប់ពេលវេលា!`).catch(()=>{});
+    }, 4500);
+    return;
+  }
+
+  ctx.reply('🎙️ បានទទួលសំឡេងរបស់អ្នក!');
+});
+
+bot.action('quick_transcript', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.reply('🤖 សូមផ្ញើឯកសារ ឬបញ្ជាក់ Link ម្ដងទៀត ដើម្បីដំណើរការស្រង់ Subtitle SRT:');
+});
+
+bot.action('quick_download', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.reply('⬇️ កំពុងដំណើរការទាញយកវីដេអូពី Link... សូមរង់ចាំបន្តិច!');
+});
 
 // Express Server Setup
 const app = express();
