@@ -849,11 +849,18 @@ async function processStoryVideo({
     await updateProgress('កំពុងទាញយកវីដេអូរឿង..', 15);
     if (fileId) {
       try {
-        const link = await bot.telegram.getFileLink(fileId);
-        await downloadFile(link.href, inputVideoPath);
+        const fileInfo = await bot.telegram.getFile(fileId);
+        // If Local Bot API is used (--local), file_path is directly on local disk!
+        if (fileInfo.file_path && fs.existsSync(fileInfo.file_path)) {
+          console.log(`Using local file directly from disk: ${fileInfo.file_path}`);
+          fs.copyFileSync(fileInfo.file_path, inputVideoPath);
+        } else {
+          const link = await bot.telegram.getFileLink(fileId);
+          await downloadFile(link.href, inputVideoPath);
+        }
       } catch (err) {
         if (err.message && err.message.toLowerCase().includes('file is too big')) {
-          throw new Error('ឯកសារវីដេអូនេះធំជាង 20MB (ដែនកំណត់របស់ Telegram Bot)! ដើម្បីបកប្រែវីដេអូធំ សូមផ្ញើជា Link (YouTube, TikTok, Facebook, Drive...) ឬផ្ញើវីដេអូក្រោម 20MB។');
+          throw new Error('ឯកសារវីដេអូនេះធំជាង 20MB! Telegram Public Server កំណត់ 20MB។ ដើម្បីទទួល File ផ្ទាល់ដល់ 2GB (2000MB) សូមបើកដំណើរការ Local Telegram Bot API Server លើ VPS!');
         }
         throw err;
       }
@@ -866,8 +873,31 @@ async function processStoryVideo({
     const duration = await getVideoDuration(inputVideoPath);
 
     // 2. Extract Audio with FFmpeg
-    await updateProgress('កំពុងស្រង់សំឡេងចេញពីវីដេអូ..', 32);
+    await updateProgress('កំពុងស្រង់សំឡេងចេញពីវីដេអូ..', 25);
     await runCmd(`ffmpeg -y -i "${inputVideoPath}" -vn -ar 16000 -ac 1 "${extractedAudioPath}"`);
+
+    // Extract Clean Background Music (Removing original foreign vocals)
+    const cleanBgmPath = path.join(workDir, 'clean_bgm.wav');
+    let hasCleanBgm = false;
+    try {
+      console.log('Isolating background music (removing original dialogue)...');
+      const pythonBins = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
+      const sepScript = path.join(__dirname, 'separate_bgm.py');
+      for (const bin of pythonBins) {
+        try {
+          await runCmd(`${bin} "${sepScript}" "${extractedAudioPath}" "${cleanBgmPath}"`);
+          if (fs.existsSync(cleanBgmPath) && fs.statSync(cleanBgmPath).size > 1000) {
+            hasCleanBgm = true;
+            console.log('✅ AI BGM isolation successful: pure background music ready!');
+            break;
+          }
+        } catch (e) {
+          // continue
+        }
+      }
+    } catch (e) {
+      console.warn('BGM isolation skipped:', e.message);
+    }
 
     // 3. Transcribe & Translate into Khmer
     await updateProgress('Gemini AI កំពុងវិភាគ និងបកប្រែសំឡេង..', 55);
@@ -943,10 +973,24 @@ async function processStoryVideo({
       voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
     }
 
-    // 5. Duck & Dub with FFmpeg
+    // 5. Duck & Dub with FFmpeg (Mixing clean BGM with Khmer voice)
     await updateProgress('កំពុង Render វីដេអូបកប្រែរួច (Quality 720p HD)..', 92);
-    const filter = `[0:a]volume=0.3[a0];[1:a]volume=1.3[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
-    await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+    if (hasCleanBgm) {
+      // 100% Pure BGM: The original foreign dialogue is completely eliminated!
+      console.log('Rendering with Clean AI Separated BGM...');
+      const filter = `[1:a]volume=0.85[bgm];[2:a]volume=1.25[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
+      await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${cleanBgmPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+    } else {
+      // Smart Dynamic Ducking: sidechaincompress ducks original foreign voice down by -22dB when Khmer voice speaks
+      console.log('Rendering with Smart Sidechain Ducking...');
+      const sidechainFilter = `[0:a][1:a]sidechaincompress=threshold=0.03:ratio=12:attack=15:release=350[bgm_ducked];[bgm_ducked]volume=0.85[bgm];[1:a]volume=1.3[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
+      try {
+        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${sidechainFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+      } catch (err) {
+        const fallbackFilter = `[0:a]volume=0.12[a0];[1:a]volume=1.3[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
+        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${fallbackFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+      }
+    }
 
     // 6. Split if requested
     const finalVideoParts = [];

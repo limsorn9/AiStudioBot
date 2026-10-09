@@ -43,7 +43,15 @@ if (serviceAccount && serviceAccount.private_key && serviceAccount.client_email)
 }
 
 const rtdb = getApps().length > 0 && process.env.FIREBASE_DB_URL ? getDatabase() : null;
-const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+const botApiRoot = process.env.BOT_API_ROOT || (process.env.LOCAL_BOT_API === 'true' ? 'http://127.0.0.1:8081' : 'https://api.telegram.org');
+const bot = new Telegraf(process.env.TELEGRAM_TOKEN, {
+  telegram: {
+    apiRoot: botApiRoot
+  }
+});
+if (botApiRoot !== 'https://api.telegram.org') {
+  console.log(`🚀 Telegram Bot ដំណើរការជាមួយ Local Bot API (${botApiRoot}) - គាំទ្រ File ផ្ទាល់ដល់ 2GB (2000MB)!`);
+}
 const ADMIN_ID = process.env.ADMIN_ID || '240224709';
 
 // Main Menu Keyboard
@@ -749,11 +757,10 @@ bot.on('document', async (ctx) => {
 
   const isVideoDoc = (doc.mime_type && doc.mime_type.startsWith('video')) || /\.(mp4|mkv|mov|avi)$/i.test(fileName);
   if (isVideoDoc) {
-    // Check Telegram Bot 20MB download limit
-    if (doc.file_size > 20 * 1024 * 1024) {
-      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(doc.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 20MB (ដែនកំណត់ទាញយករបស់ Telegram Bot)!
-
-💡 ដំណោះស្រាយ៖ សូមផ្ញើជា Link វីដេអូ (YouTube, TikTok, Facebook, Drive...) មកកាន់ Bot វិញ ដើម្បីបកប្រែវីដេអូធំៗរហូតដល់ 4GB!`);
+    // Check video limit (up to 2GB)
+    const MAX_DIRECT_SIZE = 2000 * 1024 * 1024; // 2GB (2000MB)
+    if (doc.file_size > MAX_DIRECT_SIZE) {
+      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(doc.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 2GB (2000MB)! សូមផ្ញើវីដេអូក្រោម 2GB។`);
     }
 
     if (state.currentMode === 'waiting_story_video') {
@@ -806,11 +813,10 @@ bot.on('video', async (ctx) => {
     const state = getUserState(userId);
     const video = ctx.message.video;
 
-    // Check Telegram Bot 20MB limit
-    if (video.file_size > 20 * 1024 * 1024) {
-      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(video.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 20MB (ដែនកំណត់ទាញយករបស់ Telegram Bot)!
-
-💡 ដំណោះស្រាយ៖ សូមផ្ញើជា Link វីដេអូ (YouTube, TikTok, Facebook, Drive...) មកកាន់ Bot វិញ ដើម្បីបកប្រែវីដេអូធំៗរហូតដល់ 4GB!`);
+    // Check video limit (up to 2GB)
+    const MAX_DIRECT_SIZE = 2000 * 1024 * 1024; // 2GB (2000MB)
+    if (video.file_size > MAX_DIRECT_SIZE) {
+      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(video.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 2GB (2000MB)! សូមផ្ញើវីដេអូក្រោម 2GB។`);
     }
 
     if (state.currentMode === 'waiting_story_video') {
