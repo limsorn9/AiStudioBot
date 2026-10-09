@@ -43,6 +43,88 @@ if (serviceAccount && serviceAccount.private_key && serviceAccount.client_email)
 }
 
 const rtdb = getApps().length > 0 && process.env.FIREBASE_DB_URL ? getDatabase() : null;
+
+// --- Firebase Multi-Key Management (Up to 10 keys per provider, permanent until deleted) ---
+async function getStoredApiKeys(provider = 'groq') {
+  if (!rtdb) {
+    const raw = provider === 'groq' ? (process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '') : (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '');
+    return raw.split(',').map(k => k.trim()).filter(Boolean);
+  }
+  try {
+    const snap = await rtdb.ref(`api_keys/${provider}`).once('value');
+    if (snap.exists()) {
+      const val = snap.val();
+      if (Array.isArray(val)) return val.filter(Boolean);
+      if (typeof val === 'object') return Object.values(val).filter(Boolean);
+    }
+  } catch (e) {
+    console.error('getStoredApiKeys error:', e.message);
+  }
+  return [];
+}
+
+async function addApiKeyToFirebase(provider = 'groq', newKey) {
+  if (!newKey) return { success: false, reason: 'empty' };
+  newKey = newKey.trim();
+  const existing = await getStoredApiKeys(provider);
+  if (existing.includes(newKey)) {
+    return { success: false, reason: 'duplicate', count: existing.length };
+  }
+  if (existing.length >= 10) {
+    return { success: false, reason: 'limit_reached', count: existing.length };
+  }
+  existing.push(newKey);
+  if (rtdb) {
+    try {
+      await rtdb.ref(`api_keys/${provider}`).set(existing);
+    } catch (e) {
+      console.error('Failed to save to firebase:', e);
+    }
+  }
+  if (provider === 'groq') {
+    process.env.GROQ_API_KEYS = existing.join(',');
+    process.env.GROQ_API_KEY = existing[0];
+  } else {
+    process.env.GEMINI_API_KEYS = existing.join(',');
+    process.env.GEMINI_API_KEY = existing[0];
+  }
+  return { success: true, count: existing.length };
+}
+
+async function clearAllApiKeysFromFirebase(provider = 'groq') {
+  if (rtdb) {
+    try {
+      await rtdb.ref(`api_keys/${provider}`).remove();
+    } catch (e) {}
+  }
+  if (provider === 'groq') {
+    process.env.GROQ_API_KEYS = '';
+    process.env.GROQ_API_KEY = '';
+  } else {
+    process.env.GEMINI_API_KEYS = '';
+    process.env.GEMINI_API_KEY = '';
+  }
+  return true;
+}
+
+// Sync keys from Firebase into process.env on startup
+(async () => {
+  try {
+    const groqKeys = await getStoredApiKeys('groq');
+    if (groqKeys.length > 0) {
+      process.env.GROQ_API_KEYS = groqKeys.join(',');
+      process.env.GROQ_API_KEY = groqKeys[0];
+      console.log(`🔑 បានទាញយក ${groqKeys.length} Groq API Keys ពី Firebase`);
+    }
+    const geminiKeys = await getStoredApiKeys('gemini');
+    if (geminiKeys.length > 0) {
+      process.env.GEMINI_API_KEYS = geminiKeys.join(',');
+      process.env.GEMINI_API_KEY = geminiKeys[0];
+      console.log(`🔑 បានទាញយក ${geminiKeys.length} Gemini API Keys ពី Firebase`);
+    }
+  } catch (e) {}
+})();
+
 const botApiRoot = process.env.BOT_API_ROOT || (process.env.LOCAL_BOT_API === 'true' ? 'http://127.0.0.1:8081' : 'https://api.telegram.org');
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN, {
   telegram: {
@@ -234,33 +316,56 @@ function getStoryTranslateDashboard(userId) {
   return { text, inlineKeyboard };
 }
 
-function getApiKeyDashboard() {
-  const groqStatus = process.env.GROQ_API_KEY ? '✅ បានភ្ជាប់ (Active)' : '❌ មិនទាន់មាន';
-  const geminiStatus = (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEYS) ? '✅ បានភ្ជាប់ (Active)' : '❌ មិនទាន់មាន';
+async function getApiKeyDashboard() {
+  const groqKeys = await getStoredApiKeys('groq');
+  const geminiKeys = await getStoredApiKeys('gemini');
 
-  const text = `🔑 **ការកំណត់ AI API Key សម្រាប់បកប្រែរឿង**
+  const maskKey = (k) => k.length > 10 ? `${k.slice(0, 6)}...${k.slice(-4)}` : '******';
 
-⚡ **Groq AI (Llama 3.3 70B)**៖ ${groqStatus}
-• ល្បឿន៖ 0.8s (លឿនបំផុត)
-• កូតា៖ 14,400 Requests/ថ្ងៃ (Free ១០០% គ្មានបញ្ហា Quota)
-• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ស្វ័យប្រវត្តិច្បាស់ ១០០%
+  const groqList = groqKeys.length > 0 
+    ? groqKeys.map((k, idx) => `  ${idx + 1}. \`${maskKey(k)}\``).join('\n')
+    : '  ❌ មិនទាន់មាន';
 
-🤖 **Google Gemini AI**៖ ${geminiStatus}
-• គុណភាព៖ បកប្រែរៀបរាប់មនោសញ្ចេតនាល្អ
+  const geminiList = geminiKeys.length > 0 
+    ? geminiKeys.map((k, idx) => `  ${idx + 1}. \`${maskKey(k)}\``).join('\n')
+    : '  ❌ មិនទាន់មាន';
 
-👉 សូមជ្រើសរើសប៊ូតុងខាងក្រោមដើម្បីបញ្ចូល ឬផ្លាស់ប្តូរ Key៖`;
+  const text = `🔑 **ការកំណត់ AI API Keys (រក្សាទុកក្នុង Firebase)**
+(ផ្ទុកបានរហូតដល់ ១០ Keys ក្នុងមួយប្រភេទ & Auto-Rotate ពេលជាប់ Quota)
 
-  const inlineKeyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('⚡ បញ្ចូល Groq Key (Free / ណែនាំ)', 'input_groq_key')],
-    [Markup.button.callback('🤖 បញ្ចូល Gemini Key', 'input_gemini_key')],
-    [
-      Markup.button.url('🔗 យក Groq Key (Free)', 'https://console.groq.com/keys'),
-      Markup.button.url('🔗 យក Gemini Key', 'https://aistudio.google.com')
-    ],
-    [Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]
+⚡ **Groq AI (Llama 3.3 70B)** [${groqKeys.length}/10 Keys]៖
+${groqList}
+• ល្បឿន៖ 0.8s | កូតា៖ 14,400 Requests/Key/ថ្ងៃ
+
+🤖 **Google Gemini AI** [${geminiKeys.length}/10 Keys]៖
+${geminiList}
+
+👉 សូមជ្រើសរើសប៊ូតុងខាងក្រោមដើម្បីបន្ថែម ឬលុប Key៖`;
+
+  const buttons = [];
+  if (groqKeys.length < 10) {
+    buttons.push([Markup.button.callback(`⚡ ➕ បន្ថែម Groq Key (${groqKeys.length}/10)`, 'input_groq_key')]);
+  }
+  if (geminiKeys.length < 10) {
+    buttons.push([Markup.button.callback(`🤖 ➕ បន្ថែម Gemini Key (${geminiKeys.length}/10)`, 'input_gemini_key')]);
+  }
+
+  const deleteRow = [];
+  if (groqKeys.length > 0) {
+    deleteRow.push(Markup.button.callback('🗑️ លុប Groq Key ទាំងអស់', 'clear_groq_keys'));
+  }
+  if (geminiKeys.length > 0) {
+    deleteRow.push(Markup.button.callback('🗑️ លុប Gemini Key ទាំងអស់', 'clear_gemini_keys'));
+  }
+  if (deleteRow.length > 0) buttons.push(deleteRow);
+
+  buttons.push([
+    Markup.button.url('🔗 យក Groq Key (Free)', 'https://console.groq.com/keys'),
+    Markup.button.url('🔗 យក Gemini Key', 'https://aistudio.google.com')
   ]);
+  buttons.push([Markup.button.callback('❌ ត្រឡប់ក្រោយ', 'story_back_to_menu')]);
 
-  return { text, inlineKeyboard };
+  return { text, inlineKeyboard: Markup.inlineKeyboard(buttons) };
 }
 
 function getSrtToVoiceDashboard() {
@@ -366,28 +471,18 @@ bot.command(['setkey', 'groq', 'gemini'], async (ctx) => {
     return ctx.reply('👉 របៀបប្រើ៖ `/setkey <API_KEY>`\n• បើប្រើ Groq (Free លឿនបំផុត): `/setkey gsk_...`\n• បើប្រើ Gemini: `/setkey AIzaSy...`\n\n🔗 យក Groq Key ឥតគិតថ្លៃ (10 វិនាទី)៖ https://console.groq.com/keys\n🔗 យក Gemini Key៖ https://aistudio.google.com', { parse_mode: 'Markdown' });
   }
   const key = parts[1].trim();
-  const envPath = path.join(__dirname, '.env');
-  let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+  const provider = key.startsWith('gsk_') ? 'groq' : 'gemini';
+  const result = await addApiKeyToFirebase(provider, key);
 
-  if (key.startsWith('gsk_')) {
-    process.env.GROQ_API_KEY = key;
-    if (envContent.includes('GROQ_API_KEY=')) {
-      envContent = envContent.replace(/GROQ_API_KEY=.*/, `GROQ_API_KEY=${key}`);
-    } else {
-      envContent += `\nGROQ_API_KEY=${key}\n`;
-    }
-    fs.writeFileSync(envPath, envContent, 'utf-8');
-    return ctx.reply(`⚡ បានកំណត់ Groq AI Key (Llama 3.3 70B) ជោគជ័យ! 🎉\n• ល្បឿនបកប្រែ៖ 0.8 វិនាទី (លឿនបំផុត)\n• កូតា៖ 14,400 Requests/ថ្ងៃ (Free 100% គ្មានជាប់ Quota)\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិច្បាស់ ១០០%!`);
+  if (result.success) {
+    const providerLabel = provider === 'groq' ? '⚡ Groq AI (Llama 3.3 70B)' : '🤖 Google Gemini AI';
+    return ctx.reply(`🎉 **បានរក្សាទុក Key ចូលក្នុង Firebase ជោគជ័យ!**\n\n🔑 ប្រភេទ៖ ${providerLabel}\n📊 ចំនួន Key បច្ចុប្បន្ន៖ ${result.count}/10 Keys\n💾 រក្សាទុកក្នុង Firebase ជាអចិន្ត្រៃយ៍រហូតដល់អ្នកលុបវិញ!\n🔄 ប្រព័ន្ធនឹង Auto-Rotate ប្តូរ Key ស្វ័យប្រវត្តិនៅពេល Key ណាមួយជាប់ Quota!\n\n👉 ឥឡូវលោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`);
+  } else if (result.reason === 'duplicate') {
+    return ctx.reply(`⚠️ Key នេះមាននៅក្នុងប្រព័ន្ធ Firebase រួចហើយ! (ចំនួនបច្ចុប្បន្ន: ${result.count}/10)`);
+  } else if (result.reason === 'limit_reached') {
+    return ctx.reply(`⚠️ ប្រភេទនេះបានពេញកម្រិតកំណត់ ១០ Keys រួចហើយ! សូមលុប Key មួយចំនួនសិន មុននឹងបន្ថែមថ្មី។`);
   } else {
-    process.env.GEMINI_API_KEY = key;
-    process.env.GEMINI_API_KEYS = key;
-    if (envContent.includes('GEMINI_API_KEY=')) {
-      envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${key}`);
-    } else {
-      envContent += `\nGEMINI_API_KEY=${key}\n`;
-    }
-    fs.writeFileSync(envPath, envContent, 'utf-8');
-    return ctx.reply(`✅ បានកំណត់ Gemini API Key ជោគជ័យ! 🎉\nរាល់ការបកប្រែវីដេអូ និងរឿងបន្ទាប់ នឹងប្រើប្រាស់ Gemini AI ដោយផ្ទាល់ ដើម្បីបកប្រែមានមនោសញ្ចេតនាល្អបំផុត!`);
+    return ctx.reply(`❌ មិនអាចរក្សាទុក Key បានទេ។`);
   }
 });
 
@@ -594,16 +689,38 @@ bot.action(['story_back_to_menu', 'story_cancel_task'], async (ctx) => {
 });
 
 // --- 🔑 កំណត់ API Key Handler ---
-bot.hears('🔑 កំណត់ API Key', (ctx) => {
-  const { text, inlineKeyboard } = getApiKeyDashboard();
+bot.hears('🔑 កំណត់ API Key', async (ctx) => {
+  const { text, inlineKeyboard } = await getApiKeyDashboard();
   ctx.reply(text, inlineKeyboard);
 });
 
 bot.action('manage_api_keys', async (ctx) => {
-  const { text, inlineKeyboard } = getApiKeyDashboard();
+  const { text, inlineKeyboard } = await getApiKeyDashboard();
   try {
     await ctx.editMessageText(text, inlineKeyboard);
     await ctx.answerCbQuery();
+  } catch (e) {
+    ctx.reply(text, inlineKeyboard);
+  }
+});
+
+bot.action('clear_groq_keys', async (ctx) => {
+  await clearAllApiKeysFromFirebase('groq');
+  await ctx.answerCbQuery('🗑️ បានលុប Groq Keys ទាំងអស់ជោគជ័យ');
+  const { text, inlineKeyboard } = await getApiKeyDashboard();
+  try {
+    await ctx.editMessageText(text, inlineKeyboard);
+  } catch (e) {
+    ctx.reply(text, inlineKeyboard);
+  }
+});
+
+bot.action('clear_gemini_keys', async (ctx) => {
+  await clearAllApiKeysFromFirebase('gemini');
+  await ctx.answerCbQuery('🗑️ បានលុប Gemini Keys ទាំងអស់ជោគជ័យ');
+  const { text, inlineKeyboard } = await getApiKeyDashboard();
+  try {
+    await ctx.editMessageText(text, inlineKeyboard);
   } catch (e) {
     ctx.reply(text, inlineKeyboard);
   }
@@ -826,35 +943,19 @@ bot.on('text', async (ctx) => {
   // Handle API key input (by mode or auto-detected by prefix gsk_ or AIzaSy)
   const trimmed = text.trim();
   if (state.currentMode === 'waiting_groq_key' || state.currentMode === 'waiting_gemini_key' || trimmed.startsWith('gsk_') || trimmed.startsWith('AIzaSy')) {
-    const isGroq = trimmed.startsWith('gsk_') || state.currentMode === 'waiting_groq_key';
-    const keyName = isGroq ? 'GROQ_API_KEY' : 'GEMINI_API_KEY';
-
-    process.env[keyName] = trimmed;
-    if (isGroq) {
-      process.env.GROQ_API_KEY = trimmed;
-    } else {
-      process.env.GEMINI_API_KEY = trimmed;
-      process.env.GEMINI_API_KEYS = trimmed;
-    }
-
-    try {
-      const envPath = path.join(__dirname, '.env');
-      let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
-      if (envContent.includes(`${keyName}=`)) {
-        envContent = envContent.replace(new RegExp(`${keyName}=.*`), `${keyName}=${trimmed}`);
-      } else {
-        envContent += `\n${keyName}=${trimmed}\n`;
-      }
-      fs.writeFileSync(envPath, envContent, 'utf-8');
-    } catch (e) {
-      console.error('Save env error:', e);
-    }
+    const provider = (trimmed.startsWith('gsk_') || state.currentMode === 'waiting_groq_key') ? 'groq' : 'gemini';
+    const result = await addApiKeyToFirebase(provider, trimmed);
 
     state.currentMode = null;
-    if (isGroq) {
-      return ctx.reply(`⚡ **បានកំណត់ Groq AI Key (Llama 3.3 70B) ជោគជ័យ!** 🎉\n• ល្បឿន៖ 0.8 វិនាទី (លឿនបំផុត)\n• កូតា៖ 14,400 Requests/ថ្ងៃ (Free ១០០% គ្មានបញ្ហា Quota)\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិច្បាស់ ១០០%!\n\n👉 ឥឡូវលោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
+    if (result.success) {
+      const providerLabel = provider === 'groq' ? '⚡ Groq AI (Llama 3.3 70B)' : '🤖 Google Gemini AI';
+      return ctx.reply(`🎉 **បានរក្សាទុក Key ចូលក្នុង Firebase ជោគជ័យ!**\n\n🔑 ប្រភេទ៖ ${providerLabel}\n📊 ចំនួន Key បច្ចុប្បន្ន៖ ${result.count}/10 Keys\n💾 រក្សាទុកក្នុង Firebase ជាអចិន្ត្រៃយ៍រហូតដល់អ្នកលុបវិញ!\n🔄 ប្រព័ន្ធនឹង Auto-Rotate ប្តូរ Key ស្វ័យប្រវត្តិនៅពេល Key ណាមួយជាប់ Quota!\n\n👉 លោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
+    } else if (result.reason === 'duplicate') {
+      return ctx.reply(`⚠️ Key នេះមាននៅក្នុងប្រព័ន្ធ Firebase រួចហើយ! (ចំនួនបច្ចុប្បន្ន: ${result.count}/10)`, storyToolsMenu);
+    } else if (result.reason === 'limit_reached') {
+      return ctx.reply(`⚠️ ប្រភេទនេះបានពេញកម្រិតកំណត់ ១០ Keys រួចហើយ! សូមលុប Key មួយចំនួនសិន មុននឹងបន្ថែមថ្មី។`, storyToolsMenu);
     } else {
-      return ctx.reply(`✅ **បានកំណត់ Gemini API Key ជោគជ័យ!** 🎉\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិ!\n\n👉 ឥឡូវលោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
+      return ctx.reply(`❌ មិនអាចរក្សាទុក Key បានទេ។ សូមពិនិត្យ Key ឡើងវិញ។`, storyToolsMenu);
     }
   }
 

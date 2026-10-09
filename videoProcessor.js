@@ -86,6 +86,27 @@ function rotateGeminiKey() {
   }
 }
 
+// --- Multi-Key Groq Helper (Supports up to 10 Keys & Auto-Rotation) ---
+let currentGroqKeyIndex = 0;
+function getAllGroqKeys() {
+  const raw = process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '';
+  return raw.split(',').map(k => k.trim()).filter(Boolean);
+}
+
+function getGroqKey() {
+  const keys = getAllGroqKeys();
+  if (!keys.length) return null;
+  return keys[currentGroqKeyIndex % keys.length];
+}
+
+function rotateGroqKey() {
+  const keys = getAllGroqKeys();
+  if (keys.length > 1) {
+    currentGroqKeyIndex = (currentGroqKeyIndex + 1) % keys.length;
+    console.log(`🔄 Switched to Groq Key #${currentGroqKeyIndex + 1}/${keys.length}`);
+  }
+}
+
 function parseNumberedOutput(text, count) {
   const result = new Array(count).fill('');
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -183,35 +204,47 @@ ${numberedText}`;
   return null;
 }
 
-// 2. AI Batch Translation via Groq LLM (free, zero quota lock)
+// 2. AI Batch Translation via Groq LLM (supports 10 keys & auto-rotation)
 async function batchTranslateWithGroq(lines) {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return null;
-  try {
-    const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-    const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive spoken Khmer with dramatic feeling. Tag EVERY line with either (ប្រុស) or (ស្រី) for male/female speakers (e.g. [1] (ប្រុស) ... or [2] (ស្រី) ...). Add natural particles (ណា, ហ្នឹង, អ្ហា, ឯង...) and punctuation (..., ?, !). Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const khmer = data.choices?.[0]?.message?.content;
-      if (khmer) {
-        const parsed = parseNumberedOutput(khmer, lines.length);
-        if (parsed && parsed.some(Boolean)) return parsed;
+  const keys = getAllGroqKeys();
+  if (!keys.length) return null;
+
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const apiKey = getGroqKey();
+    try {
+      const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
+      const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive spoken Khmer with dramatic feeling. Tag EVERY line with either (ប្រុស) or (ស្រី) for male/female speakers (e.g. [1] (ប្រុស) ... or [2] (ស្រី) ...). Add natural particles (ណា, ហ្នឹង, អ្ហា, ឯង...) and punctuation (..., ?, !). Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3
+        })
+      });
+
+      if (res.status === 429) {
+        console.warn(`[Groq 429 Rate Limit] Rotating key...`);
+        rotateGroqKey();
+        continue;
       }
+
+      if (res.ok) {
+        const data = await res.json();
+        const khmer = data.choices?.[0]?.message?.content;
+        if (khmer) {
+          const parsed = parseNumberedOutput(khmer, lines.length);
+          if (parsed && parsed.some(Boolean)) return parsed;
+        }
+      }
+    } catch (err) {
+      console.warn('Groq batch error:', err.message);
+      rotateGroqKey();
     }
-  } catch (err) {
-    console.warn('Groq batch error:', err.message);
   }
   return null;
 }
