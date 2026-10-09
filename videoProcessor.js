@@ -822,10 +822,23 @@ async function processStoryVideo({
   const dubbedVideoPath = path.join(workDir, 'dubbed_output.mp4');
   const srtPath = path.join(workDir, 'subtitle_kh.srt');
 
-  async function updateStatus(message) {
+  async function updateProgress(stageText, percent = 10) {
     if (!statusMsgId) return;
+    const totalBars = 12;
+    const filled = Math.min(totalBars, Math.max(0, Math.round((percent / 100) * totalBars)));
+    const empty = totalBars - filled;
+    const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
+    const message = `📊 Progress Bar\n[${bar}] ${percent}%\n\n📍 🎙️ ${stageText}\n🎙️ សម្លេង៖ ${voiceType}`;
+
     try {
-      await ctx.telegram.editMessageText(ctx.chat.id, statusMsgId, null, message);
+      await ctx.telegram.editMessageText(ctx.chat.id, statusMsgId, null, message, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ ត្រឡប់ក្រោយ (បោះបង់)', callback_data: 'story_cancel_task' }]
+          ]
+        }
+      });
     } catch (e) {
       // Ignore Telegram rate limits or unchanged text
     }
@@ -833,7 +846,7 @@ async function processStoryVideo({
 
   try {
     // 1. Download Video
-    await updateStatus(`⏳ ដំណាក់កាល 1/5: កំពុងទាញយកវីដេអូ... [■■□□□□□□□□] 20%`);
+    await updateProgress('កំពុងទាញយកវីដេអូរឿង..', 15);
     if (fileId) {
       try {
         const link = await bot.telegram.getFileLink(fileId);
@@ -853,11 +866,11 @@ async function processStoryVideo({
     const duration = await getVideoDuration(inputVideoPath);
 
     // 2. Extract Audio with FFmpeg
-    await updateStatus(`🎙️ ដំណាក់កាល 2/5: កំពុងស្រង់សំឡេងចេញពីវីដេអូ... [■■■■□□□□□□] 40%`);
+    await updateProgress('កំពុងស្រង់សំឡេងចេញពីវីដេអូ..', 32);
     await runCmd(`ffmpeg -y -i "${inputVideoPath}" -vn -ar 16000 -ac 1 "${extractedAudioPath}"`);
 
     // 3. Transcribe & Translate into Khmer
-    await updateStatus(`🤖 ដំណាក់កាល 3/5: AI កំពុងស្ដាប់សាច់រឿង និងបកប្រែជាភាសាខ្មែរ... [■■■■■■□□□□] 60%`);
+    await updateProgress('Gemini AI កំពុងវិភាគ និងបកប្រែសំឡេង..', 55);
     const transcription = await transcribeAudio(extractedAudioPath);
 
     const hasSegments = transcription.segments && transcription.segments.length > 0;
@@ -911,7 +924,7 @@ async function processStoryVideo({
     fs.writeFileSync(srtPath, srtContent, 'utf-8');
 
     // 4. Synthesize Khmer Voice (Synchronized with lip movements & natural breathing gaps)
-    await updateStatus(`🔊 ដំណាក់កាល 4/5: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរតាមមាត់តួអង្គ (Lip-Sync & Emotion)... [■■■■■■■■□□] 80%`);
+    await updateProgress('កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរតាមមាត់តួអង្គ (Lip-Sync)..', 78);
     let voiceAudioPath;
     if (validSegments && validSegments.length > 0) {
       try {
@@ -931,7 +944,7 @@ async function processStoryVideo({
     }
 
     // 5. Duck & Dub with FFmpeg
-    await updateStatus(`🎬 ដំណាក់កាល 5/5: កំពុង Render វីដេអូបកប្រែរួច (Ducking BGM)... [■■■■■■■■■□] 95%`);
+    await updateProgress('កំពុង Render វីដេអូបកប្រែរួច (Quality 720p HD)..', 92);
     const filter = `[0:a]volume=0.3[a0];[1:a]volume=1.3[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
     await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
 
@@ -951,7 +964,7 @@ async function processStoryVideo({
     }
 
     // 7. Send Result to Telegram User
-    await updateStatus(`✅ ការបកប្រែ និងបញ្ចូលសំឡេងជោគជ័យ 100%! 🎉 កំពុងបញ្ជូនវីដេអូមកកាន់អ្នក...`);
+    await updateProgress('បកប្រែ និងបញ្ចូលសំឡេងរួចរាល់ 100%!', 100);
 
     for (const part of finalVideoParts) {
       const partLabel = finalVideoParts.length > 1 ? ` (ភាគទី ${part.partNumber})` : '';

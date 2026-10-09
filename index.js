@@ -509,10 +509,11 @@ bot.action(['story_voice_male', 'story_voice_female', 'story_voice_both'], async
   ctx.reply(text, backOnlyMenu);
 });
 
-bot.action('story_back_to_menu', async (ctx) => {
+bot.action(['story_back_to_menu', 'story_cancel_task'], async (ctx) => {
   const userId = ctx.from.id;
   const state = getUserState(userId);
   state.currentMode = null;
+  await ctx.answerCbQuery('បានបោះបង់ដំណើរការ').catch(() => {});
   await ctx.deleteMessage().catch(() => {});
   ctx.reply('ត្រឡប់មកកាន់ Tools សម្រាប់រឿងវិញ...', storyToolsMenu);
 });
