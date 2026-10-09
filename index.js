@@ -6,6 +6,10 @@ const { getDatabase } = require('firebase-admin/database');
 
 const fs = require('fs');
 const path = require('path');
+const {
+  processStoryVideo,
+  processSrtFileToVoice
+} = require('./videoProcessor');
 
 // 1. រៀបចំ Firebase Realtime Database
 let serviceAccount = null;
@@ -69,6 +73,11 @@ const storyToolsMenu = Markup.keyboard([
   ['💻 បកប្រែរឿង', '🎙️ SRT to Voice'],
   ['🤖 Transcript SRT', '🎙️ Clone សម្លេង'],
   ['⬇️ ទាញយករឿង', '❌ ត្រឡប់ក្រោយ']
+]).resize();
+
+// Keyboard សម្រាប់ Mode រង់ចាំ Upload (មានតែប៊ូតុងត្រឡប់ក្រោយ)
+const backOnlyMenu = Markup.keyboard([
+  ['❌ ត្រឡប់ក្រោយ']
 ]).resize();
 
 async function saveUser(ctx) {
@@ -180,6 +189,13 @@ const splitButtonLabels = [
   '🎛️ កំណត់កាត់ជាកង់: ១ កង់/ភាគ (~10mn)',
   '🎛️ កំណត់កាត់ជាកង់: ពេញមួយរឿង (Full)'
 ];
+
+function getSplitMinutes(splitIndex) {
+  if (splitIndex === 0) return 3;
+  if (splitIndex === 1) return 5;
+  if (splitIndex === 2) return 10;
+  return 0; // Full video
+}
 
 function getStoryTranslateDashboard(userId) {
   const state = getUserState(userId);
@@ -617,37 +633,26 @@ bot.on('text', async (ctx) => {
 
       await deductCredits(userId, 1000);
       const splitTime = splitOptions[state.storySplitIndex];
+      const splitMins = getSplitMinutes(state.storySplitIndex);
       const progressMsg = await ctx.reply(`🎬 បានទទួល Link វីដេអូរឿង!
 🔗 Link: ${targetUrl}
 🎙️ សំឡេង: ${state.storyVoice}
 🎞️ កាត់ភាគ: ${splitTime}
 💰 បានកាត់ 1000 Credits (សមតុល្យនៅសល់: ${userCredits - 1000} Cr)
 
-⏳ ដំណាក់កាល 1/4: កំពុងទាញយកវីដេអូពី Server... [■■□□□□□□□□] 25%`);
+⏳ កំពុងចាប់ផ្តើមដំណើរការទាញយក និងបកប្រែវីដេអូ...`);
 
-      setTimeout(() => {
-        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `🎬 កំពុងដំណើរការបកប្រែរឿង...
-🔗 Link: ${targetUrl}
-🎙️ សំឡេង: ${state.storyVoice}
-🎞️ កាត់ភាគ: ${splitTime}
-
-🤖 ដំណាក់កាល 2/4: Gemini AI កំពុងស្ដាប់ ស្រង់សំឡេង និងបកប្រែជាភាសាខ្មែរ... [■■■■■□□□□□] 50%`).catch(()=>{});
-      }, 3000);
-
-      setTimeout(() => {
-        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `🎬 កំពុងដំណើរការបញ្ចូលសំឡេង...
-🎙️ Voice Synthesis: ${state.storyVoice}
-🎞️ កាត់ភាគ: ${splitTime}
-
-🔊 ដំណាក់កាល 3/4: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរ & Ducking Background Music... [■■■■■■■□□□] 75%`).catch(()=>{});
-      }, 6000);
-
-      setTimeout(() => {
-        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ ការបកប្រែរឿងបានជោគជ័យ! 🎉
-🎞️ ការកំណត់កាត់ភាគ: ${splitTime}
-🎬 វីដេអូភាគនិមួយៗត្រូវបានបញ្ជូនទៅកាន់ Queue Worker រួចរាល់។
-📥 File វីដេអូរឿងនឹងត្រូវបញ្ជូនមកកាន់លោកអ្នកតាមរយៈ Telegram នេះភ្លាមៗនៅពេល Render ចប់ 100%!`).catch(()=>{});
-      }, 9000);
+      processStoryVideo({
+        bot,
+        ctx,
+        fileUrl: targetUrl,
+        voiceType: state.storyVoice,
+        splitMinutes: splitMins,
+        statusMsgId: progressMsg.message_id
+      }).catch(err => {
+        console.error('Video link process error:', err);
+        ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+      });
       return;
     }
 
@@ -718,29 +723,61 @@ bot.on('document', async (ctx) => {
   if (fileName.toLowerCase().endsWith('.srt')) {
     const progressMsg = await ctx.reply(`📄 បានទទួលឯកសារ Subtitle: ${fileName}
 🎙️ សំឡេង៖ ${state.srtVoice || 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)'}
-⚡ កំពុងដំណើរការបម្លែងជាសំឡេងនិយាយខ្មែរ (TTS Synthesis)... [■■■■■□□□□□] 50%`);
+⚡ កំពុងដំណើរការបម្លែងជាសំឡេងនិយាយខ្មែរ (TTS Synthesis)...`);
 
-    setTimeout(() => {
-      ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ បម្លែង Subtitle SRT ទៅជាសំឡេងជោគជ័យ! 🎉
-📄 ឯកសារ: ${fileName}
-🔊 Audio Track ភាសាខ្មែរ (.mp3) កំពុងត្រូវបានបញ្ចូលជូន...`).catch(()=>{});
-    }, 4000);
+    try {
+      const link = await bot.telegram.getFileLink(doc.file_id);
+      const res = await fetch(link.href);
+      const srtContent = await res.text();
+
+      processSrtFileToVoice({
+        ctx,
+        srtContent,
+        voiceType: state.srtVoice,
+        statusMsgId: progressMsg.message_id
+      }).catch(err => {
+        console.error('SRT process error:', err);
+        ctx.reply(`❌ បរាជ័យក្នុងការបម្លែង SRT៖ ${err.message}`);
+      });
+    } catch (err) {
+      console.error('Download SRT error:', err);
+      ctx.reply(`❌ មិនអាចទាញយក File .srt បានទេ៖ ${err.message}`);
+    }
     return;
   }
 
   if (state.currentMode === 'waiting_story_video') {
+    const isVideoDoc = (doc.mime_type && doc.mime_type.startsWith('video')) || /\.(mp4|mkv|mov|avi)$/i.test(fileName);
+    if (!isVideoDoc) {
+      return ctx.reply('⚠️ សូមផ្ញើតែឯកសារវីដេអូ (MP4, MKV...) ឬ Subtitle (.srt) ប៉ុណ្ណោះ!');
+    }
+
     const userData = await getUserInfo(userId);
     const userCredits = userData.credits || 0;
     if (userCredits < 1000) {
       return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
     }
     await deductCredits(userId, 1000);
-    ctx.reply(`📦 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)
+
+    const splitMins = getSplitMinutes(state.storySplitIndex);
+    const progressMsg = await ctx.reply(`📦 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)
 🎙️ សំឡេង: ${state.storyVoice}
 🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
 💰 បានកាត់ 1000 Credits
 
-⏳ កំពុងបញ្ចូលទៅក្នុង Queue Worker សម្រាប់ Render និងកាត់ភាគ...`);
+⏳ កំពុងចាប់ផ្តើមដំណើរការបកប្រែ និងបញ្ចូលសំឡេង...`);
+
+    processStoryVideo({
+      bot,
+      ctx,
+      fileId: doc.file_id,
+      voiceType: state.storyVoice,
+      splitMinutes: splitMins,
+      statusMsgId: progressMsg.message_id
+    }).catch(err => {
+      console.error('Document video process error:', err);
+      ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+    });
     return;
   }
 
@@ -760,12 +797,26 @@ bot.on('video', async (ctx) => {
       return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
     }
     await deductCredits(userId, 1000);
-    ctx.reply(`🎬 បានទទួលវីដេអូ! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)
+
+    const splitMins = getSplitMinutes(state.storySplitIndex);
+    const progressMsg = await ctx.reply(`🎬 បានទទួលវីដេអូ! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)
 🎙️ សំឡេង: ${state.storyVoice}
 🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
 💰 បានកាត់ 1000 Credits
 
-🚀 ប្រព័ន្ធកំពុងដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរជូន...`);
+⏳ កំពុងចាប់ផ្តើមដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ...`);
+
+    processStoryVideo({
+      bot,
+      ctx,
+      fileId: video.file_id,
+      voiceType: state.storyVoice,
+      splitMinutes: splitMins,
+      statusMsgId: progressMsg.message_id
+    }).catch(err => {
+      console.error('Video process error:', err);
+      ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+    });
     return;
   }
   ctx.reply(`🎬 បានទទួលវីដេអូ (រយៈពេល ${video.duration} វិនាទី)`);
