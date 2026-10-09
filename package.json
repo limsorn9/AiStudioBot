@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/limsorn9/AiStudioBot#readme",
   "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
     "firebase-admin": "^14.5.0",
