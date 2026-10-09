@@ -127,9 +127,42 @@ function parseNumberedOutput(text, count) {
   return result;
 }
 
+// Helper: Temporal smoothing on speaker diarization to eliminate single-segment jitter/flip-flops
+function smoothSpeakerSegments(segments) {
+  if (!segments || segments.length < 3) return segments;
+
+  // Pass 1: Eliminate isolated single-segment flips (e.g. Male -> Female -> Male where Female is short)
+  for (let i = 1; i < segments.length - 1; i++) {
+    const prevG = segments[i - 1].gender;
+    const nextG = segments[i + 1].gender;
+    const currG = segments[i].gender;
+    const dur = (segments[i].end || 0) - (segments[i].start || 0);
+    const gapPrev = (segments[i].start || 0) - (segments[i - 1].end || 0);
+
+    if (prevG === nextG && currG !== prevG) {
+      if (dur < 2.2 || gapPrev < 0.8) {
+        segments[i].gender = prevG;
+      }
+    }
+  }
+
+  // Pass 2: Merge rapid succession of sentences spoken by same person (<0.6s pause)
+  for (let i = 1; i < segments.length; i++) {
+    const gap = (segments[i].start || 0) - (segments[i - 1].end || 0);
+    const dur = (segments[i].end || 0) - (segments[i].start || 0);
+    if (gap < 0.6 && dur < 1.5 && segments[i].gender !== segments[i - 1].gender) {
+      segments[i].gender = segments[i - 1].gender;
+    }
+  }
+
+  return segments;
+}
+
 // Helper: Polish translated Khmer for natural movie dubbing & breathing pauses
 function polishKhmerDubbing(text, gender) {
   let cleaned = (text || '').trim();
+  // Strip number prefixes like [1], [2] and tags
+  cleaned = cleaned.replace(/^\s*\[?\d+\]?[\.\:\)\-\s]*(\((ប្រុស|ស្រី)\))?\s*/i, '').trim();
   cleaned = cleaned.replace(/^\s*\((ប្រុស|ស្រី)\)\s*/i, '').trim();
 
   // Fix common machine-translation artifacts from Chinese dramas
@@ -139,6 +172,18 @@ function polishKhmerDubbing(text, gender) {
   cleaned = cleaned.replace(/លោក Hu Xiuchun/g, 'ហ៊ូស៊ូឈុន');
   cleaned = cleaned.replace(/លោក Xiuchun/g, 'ស៊ូឈុន');
 
+  // Enforce gender-appropriate particles to prevent cross-gender speech
+  const isMale = (gender === 'male' || gender === 'ប្រុស');
+  const isFemale = (gender === 'female' || gender === 'ស្រី');
+
+  if (isMale) {
+    // Male characters should never say "ចាស"
+    cleaned = cleaned.replace(/\bចាស[់]?\b/g, 'បាទ');
+  } else if (isFemale) {
+    // Female characters should never say "បាទ"
+    cleaned = cleaned.replace(/\bបាទ\b/g, 'ចាស');
+  }
+
   // Natural breath cadence for TTS
   if (!/[.!?។,៕\.\.\.]$/.test(cleaned)) {
     cleaned += '...';
@@ -146,28 +191,35 @@ function polishKhmerDubbing(text, gender) {
   return cleaned;
 }
 
-// 1. AI Batch Translation via Gemini (96% less API quota, instant results)
-async function batchTranslateWithGemini(lines) {
+// 1. AI Batch Translation via Gemini (Multi-Key with Verified Speaker Gender)
+async function batchTranslateWithGemini(segmentsChunk) {
   const keys = getAllGeminiKeys();
   if (!keys.length) return null;
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const apiKey = getGeminiKey();
     try {
-      const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-      const prompt = `You are a legendary Khmer movie voice director and dubbing artist (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
+      const numberedText = segmentsChunk.map((s, idx) => {
+        const role = (s.gender === 'female' || (s.genderTag && s.genderTag.includes('ស្រី'))) ? 'ស្រី' : 'ប្រុស';
+        return `[${idx + 1}] (${role}) ${s.text}`;
+      }).join('\n');
+
+      const prompt = `You are a professional movie dubbing director and voice translation artist for Cambodian cinema (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
 Translate each numbered line of dialogue below into natural, emotive, and expressive spoken Khmer (ការសន្ទនាភាពយន្ត មានមនោសញ្ចេតនា និងអារម្មណ៍រស់រវើក).
 
-CRITICAL DUBBING & ROLE RULES:
-1. SPEAKER TAG: You MUST tag EVERY single line with either "(ប្រុស)" if male speaks, or "(ស្រី)" if female speaks based on conversation context, tone, and pronouns!
-Example format:
-[1] (ប្រុស) ស៊ូឈុនមានរឿងអីមែនទេ?
-[2] (ស្រី) ចាស... ម្ដាយខ្ញុំឈឺត្រូវការលុយ...
-2. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
-3. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
-4. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
-5. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
-6. NO EXTRA TEXT: Output ONLY the numbered translated lines.
+CRITICAL CHARACTER ROLE & GENDER RULES:
+Each input line ALREADY includes the speaker gender identified from actual audio: (ប្រុស) for Male, or (ស្រី) for Female.
+1. PRESERVE SPEAKER TAG: You MUST start EVERY single translated line with the EXACT SAME speaker tag: [1] (ប្រុស) or [2] (ស្រី)!
+2. MATCH KHMER VOCABULARY STRICTLY TO GENDER:
+   - For (ប្រុស): Use natural male conversational pronouns and polite particles (បាទ, ខ្ញុំ, បង, ឯង, អញ, អាល្អិត...). A male speaker must NEVER use female words like "ចាស" or "អូន" (when addressing herself)!
+   - For (ស្រី): Use natural female conversational pronouns and polite particles (ចាស, ខ្ញុំ, អូន, នាងខ្ញុំ, លោកបង, ឯង...). A female speaker must NEVER say "បាទ"!
+3. COHERENCE & CONTINUITY:
+   - If consecutive lines have the same speaker, KEEP the same gender and dialogue tone consistently.
+4. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
+5. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
+6. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
+7. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
+8. NO EXTRA TEXT: Output ONLY the numbered translated lines.
 
 ${numberedText}`;
 
@@ -192,7 +244,7 @@ ${numberedText}`;
         const data = await res.json();
         const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (khmer) {
-          const parsed = parseNumberedOutput(khmer, lines.length);
+          const parsed = parseNumberedOutput(khmer, segmentsChunk.length);
           if (parsed && parsed.some(Boolean)) {
             rotateGeminiKey(); // Round-robin to next key in pool
             return parsed;
@@ -207,30 +259,38 @@ ${numberedText}`;
   return null;
 }
 
-// 2. AI Batch Translation via Groq LLM (supports 10 keys & auto-rotation)
-async function batchTranslateWithGroq(lines) {
+// 2. AI Batch Translation via Groq LLM (supports 10 keys & auto-rotation, with Verified Speaker Gender)
+async function batchTranslateWithGroq(segmentsChunk) {
   const keys = getAllGroqKeys();
   if (!keys.length) return null;
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const apiKey = getGroqKey();
     try {
+      const numberedText = segmentsChunk.map((s, idx) => {
+        const role = (s.gender === 'female' || (s.genderTag && s.genderTag.includes('ស្រី'))) ? 'ស្រី' : 'ប្រុស';
+        return `[${idx + 1}] (${role}) ${s.text}`;
+      }).join('\n');
+
       const prompt = `You are a legendary Khmer movie voice director and dubbing artist (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
 Translate each numbered line of dialogue below into natural, emotive, and expressive spoken Khmer (ការសន្ទនាភាពយន្ត មានមនោសញ្ចេតនា និងអារម្មណ៍រស់រវើក).
 
-CRITICAL CHARACTER & ROLE ASSIGNMENT RULES:
-1. SPEAKER TAG: You MUST tag EVERY single line with either "(ប្រុស)" if male speaks, or "(ស្រី)" if female speaks based on conversation context, tone, address forms, and pronouns!
-   Example format:
-   [1] (ប្រុស) ឈប់ភ្លាម! ឯងចង់ទៅណា?
-   [2] (ស្រី) ចាស... ម្ដាយខ្ញុំឈឺត្រូវការលុយ...
-   - If only ONE character is speaking (e.g. narrator or solo actor), do NOT alternate; keep ALL lines consistently either (ប្រុស) or (ស្រី)!
-2. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
-3. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
-4. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
-5. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
-6. NO EXTRA TEXT: Output ONLY the numbered translated lines:
+CRITICAL CHARACTER ROLE & GENDER RULES:
+Each input line ALREADY includes the speaker gender identified from actual audio: (ប្រុស) for Male, or (ស្រី) for Female.
+1. PRESERVE SPEAKER TAG: You MUST start EVERY single translated line with the EXACT SAME speaker tag: [1] (ប្រុស) or [2] (ស្រី)!
+2. MATCH KHMER VOCABULARY STRICTLY TO GENDER:
+   - For (ប្រុស): Use natural male conversational pronouns and polite particles (បាទ, ខ្ញុំ, បង, ឯង, អញ, អាល្អិត...). A male speaker must NEVER use female words like "ចាស" or "អូន" (when addressing herself)!
+   - For (ស្រី): Use natural female conversational pronouns and polite particles (ចាស, ខ្ញុំ, អូន, នាងខ្ញុំ, លោកបង, ឯង...). A female speaker must NEVER say "បាទ"!
+3. COHERENCE & CONTINUITY:
+   - If consecutive lines have the same speaker, KEEP the same gender and dialogue tone consistently.
+4. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
+5. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
+6. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
+7. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
+8. NO EXTRA TEXT: Output ONLY the numbered translated lines:
 
 ${numberedText}`;
+
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -254,7 +314,7 @@ ${numberedText}`;
         const data = await res.json();
         const khmer = data.choices?.[0]?.message?.content;
         if (khmer) {
-          const parsed = parseNumberedOutput(khmer, lines.length);
+          const parsed = parseNumberedOutput(khmer, segmentsChunk.length);
           if (parsed && parsed.some(Boolean)) {
             rotateGroqKey(); // Round-robin to next key in pool
             return parsed;
@@ -269,7 +329,7 @@ ${numberedText}`;
   return null;
 }
 
-// 3. Batch Translate Entire Segments Array (Saves 95%+ Quota)
+// 3. Batch Translate Entire Segments Array (Preserves Verified Speaker Gender)
 async function batchTranslateSegments(segments, sourceLang) {
   if (!segments || !segments.length) return [];
   if (sourceLang === 'km') {
@@ -281,37 +341,37 @@ async function batchTranslateSegments(segments, sourceLang) {
 
   for (let b = 0; b < segments.length; b += batchSize) {
     const chunk = segments.slice(b, b + batchSize);
-    const chunkTexts = chunk.map(s => s.text);
 
-    // 1. Try Groq Batch (Ultra-fast 0.8s, 14,400 free requests/day, zero quota lock)
+    // 1. Try Groq Batch (Ultra-fast 0.8s, Llama 3.3 70B, supports 10 pooled keys)
     let translated = null;
-    if (process.env.GROQ_API_KEY) {
-      translated = await batchTranslateWithGroq(chunkTexts);
+    if (getAllGroqKeys().length > 0) {
+      translated = await batchTranslateWithGroq(chunk);
     }
 
-    // 2. Try Gemini Batch
-    if (!translated && (process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEYS)) {
-      translated = await batchTranslateWithGemini(chunkTexts);
+    // 2. Try Gemini Batch (Multi-key auto-rotation)
+    if (!translated && getAllGeminiKeys().length > 0) {
+      translated = await batchTranslateWithGemini(chunk);
     }
 
     // 3. Fallback: Translate individually with Google if both AI batches fail
     if (!translated) {
       translated = [];
-      for (const t of chunkTexts) {
-        const res = await translateToKhmer(t);
-        translated.push(res);
-        await new Promise(r => setTimeout(r, 300));
+      for (const seg of chunk) {
+        const role = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
+        const res = await translateToKhmer(seg.text);
+        translated.push(role + res);
+        await new Promise(r => setTimeout(r, 250));
       }
     }
 
-    // Fill missing items with original
-    for (let i = 0; i < chunkTexts.length; i++) {
-      allResults.push((translated[i] && translated[i].trim()) || chunkTexts[i]);
+    // Fill missing items with original text
+    for (let i = 0; i < chunk.length; i++) {
+      allResults.push((translated[i] && translated[i].trim()) || chunk[i].text);
     }
 
     // Polite delay between batches
     if (b + batchSize < segments.length) {
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
@@ -526,12 +586,18 @@ async function transcribeAndDiarizeWithGemini(audioPath) {
       try {
         console.log(`🤖 Gemini Multimodal AI កំពុងស្ដាប់សំឡេងវីដេអូផ្ទាល់ដើម្បីស្រង់អក្សរ និងបែងចែកភេទតួអង្គ...`);
 
-        const prompt = `You are a professional drama dialogue supervisor and casting director.
-LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO.
+        const prompt = `You are a professional movie dialogue supervisor and casting director.
+LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO TRACK.
 1. Transcribe all spoken dialogues with accurate start time and end time in seconds.
-2. CRITICAL SPEAKER GENDER IDENTIFICATION:
-   Listen to each speaker's actual voice frequency, timbre, and vocal characteristics.
-   Classify each segment strictly as "male" (សំឡេងប្រុស) or "female" (សំឡេងស្រី).
+2. CRITICAL SPEAKER GENDER IDENTIFICATION & CONTINUITY:
+   Listen to each speaker's actual voice frequency, timbre, and vocal characteristics:
+   - Deep, masculine, low pitch voice -> classify strictly as "male"
+   - Feminine, softer, higher pitch voice -> classify strictly as "female"
+   CHARACTER CONTINUITY RULES:
+   - Identify distinct characters in the scene.
+   - If a character speaks multiple sentences in a row, KEEP their gender strictly consistent!
+   - Characters do NOT flip-flop between male and female within the same monologue or dialogue turn.
+   - Only switch gender when a different character takes turns speaking.
 3. Return a STRICT JSON array of objects with the exact structure:
 [
   {
@@ -585,14 +651,16 @@ Output ONLY valid JSON. No markdown formatting, no commentary.`;
               console.log(`✅ Gemini AI បានស្ដាប់ឮ និងស្រង់បាន ${parsed.length} dialogue segments ជាមួយភេទប្រុសស្រីត្រឹមត្រូវ!`);
               rotateGeminiKey();
               try { fs.unlinkSync(mp3Path); } catch (e) {}
+              const rawSegments = parsed.map(s => ({
+                start: Math.max(0, parseFloat(s.start) || 0),
+                end: Math.max((parseFloat(s.start) || 0) + 0.6, parseFloat(s.end) || ((parseFloat(s.start) || 0) + 2)),
+                gender: (s.gender && s.gender.toLowerCase().includes('female')) ? 'female' : 'male',
+                text: (s.text || '').trim()
+              })).filter(s => s.text);
+              const smoothedSegments = smoothSpeakerSegments(rawSegments);
               return {
-                text: parsed.map(s => s.text).join(' '),
-                segments: parsed.map(s => ({
-                  start: Math.max(0, parseFloat(s.start) || 0),
-                  end: Math.max((parseFloat(s.start) || 0) + 0.6, parseFloat(s.end) || ((parseFloat(s.start) || 0) + 2)),
-                  gender: (s.gender && s.gender.toLowerCase().includes('female')) ? 'female' : 'male',
-                  text: (s.text || '').trim()
-                })).filter(s => s.text),
+                text: smoothedSegments.map(s => s.text).join(' '),
+                segments: smoothedSegments,
                 language: 'zh'
               };
             }
@@ -797,8 +865,8 @@ async function synthesizeSynchronizedVoiceTrack({
         segVoice = 'km-KH-PisethNeural';
       }
 
-      // Strip speaker tag (ប្រុស)/(ស្រី) from TTS text so it doesn't speak "ប្រុស" / "ស្រី"
-      const cleanTtsText = rawText.replace(/^\s*\((ប្រុស|ស្រី)\)\s*/i, '').trim() || rawText;
+      // Strip number prefix and speaker tag (ប្រុស)/(ស្រី) from TTS text so it doesn't speak tags aloud
+      const cleanTtsText = rawText.replace(/^\s*\[?\d+\]?[\.\:\)\-\s]*(\((ប្រុស|ស្រី)\))?\s*/i, '').replace(/^\s*\((ប្រុស|ស្រី)\)\s*/i, '').trim() || rawText;
 
       batch.push((async () => {
         try {
@@ -1142,24 +1210,29 @@ async function processStoryVideo({
     if (hasSegments) {
       console.log(`Processing ${transcription.segments.length} dialogue segments with Batch AI Translation...`);
       validSegments = transcription.segments.filter(s => s && s.text && s.text.trim());
+      // Apply speaker smoothing to prevent single-segment jitter before translation
+      validSegments = smoothSpeakerSegments(validSegments);
       translatedTexts = await batchTranslateSegments(validSegments, transcription.language);
 
       for (let i = 0; i < validSegments.length; i++) {
         const seg = validSegments[i];
         let rawKhmer = (translatedTexts[i] || seg.text).trim();
 
-        // 1. Detect if AI LLM (Groq / Gemini) has already assigned a role tag:
-        let genderTag = '';
-        if (/^\s*\(\s*ស្រី\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ស្រី)')) {
-          genderTag = '(ស្រី) ';
-        } else if (/^\s*\(\s*ប្រុស\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ប្រុស)')) {
-          genderTag = '(ប្រុស) ';
+        // 1. Detect if translation assigned a role tag, otherwise strictly enforce segment's verified audio gender
+        let isFemale = false;
+        if (/^\s*\[?\d*\]?[\.\:\)\-\s]*\(\s*ស្រី\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ស្រី)')) {
+          isFemale = true;
+        } else if (/^\s*\[?\d*\]?[\.\:\)\-\s]*\(\s*ប្រុស\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ប្រុស)')) {
+          isFemale = false;
         } else {
-          // Acoustic pitch fallback only if LLM did not provide a tag
-          genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
+          isFemale = (seg.gender === 'female');
         }
 
-        const polished = polishKhmerDubbing(rawKhmer, genderTag.includes('ស្រី') ? 'female' : 'male');
+        // Synchronize seg.gender with the tag so TTS & SRT match 100%
+        seg.gender = isFemale ? 'female' : 'male';
+        const genderTag = isFemale ? '(ស្រី) ' : '(ប្រុស) ';
+
+        const polished = polishKhmerDubbing(rawKhmer, seg.gender);
         const cleanKhmer = genderTag + polished;
 
         translatedTexts[i] = cleanKhmer;

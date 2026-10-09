@@ -135,6 +135,29 @@ def diarize_and_classify_speakers(segments, raw_audio, sr=16000):
                 seg["gender"] = "female" if cluster_labels[i] == 1 else "male"
             seg["pitch"] = round(float(f0_arr[i]), 1)
 
+        # Temporal smoothing to prevent speaker jitter / glitching on single isolated segments
+        # (e.g. [male, female, male] where the middle segment is short or immediately follows male speech)
+        for i in range(1, len(segments) - 1):
+            prev_g = segments[i - 1]["gender"]
+            next_g = segments[i + 1]["gender"]
+            curr_g = segments[i]["gender"]
+            gap_prev = segments[i]["start"] - segments[i - 1]["end"]
+            dur = segments[i]["end"] - segments[i]["start"]
+            
+            # If surrounded by same gender and either duration is short or pause is small, smooth it
+            if prev_g == next_g and curr_g != prev_g:
+                if dur < 2.0 or gap_prev < 0.8:
+                    segments[i]["gender"] = prev_g
+
+        # Check consecutive pairs with almost no gap (<0.6s): usually the same character continuing their sentence
+        for i in range(1, len(segments)):
+            gap = segments[i]["start"] - segments[i - 1]["end"]
+            dur = segments[i]["end"] - segments[i]["start"]
+            if gap < 0.6 and dur < 1.5 and segments[i]["gender"] != segments[i - 1]["gender"]:
+                # If pitch is ambiguous (between 125 and 185), inherit previous speaker
+                if 125.0 <= f0_arr[i] <= 185.0:
+                    segments[i]["gender"] = segments[i - 1]["gender"]
+
     return segments
 
 def transcribe(audio_path, model_name="tiny"):
