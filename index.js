@@ -4,11 +4,19 @@ const express = require('express');
 const { initializeApp, cert, getApps } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
+const fs = require('fs');
+const path = require('path');
+
 // 1. រៀបចំ Firebase
 let serviceAccount;
 try {
-  if (process.env.FIREBASE_CREDENTIALS) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+  const credEnv = (process.env.FIREBASE_CREDENTIALS || '').trim();
+  if (credEnv.startsWith('{')) {
+    serviceAccount = JSON.parse(credEnv);
+  } else if (credEnv && fs.existsSync(credEnv)) {
+    serviceAccount = JSON.parse(fs.readFileSync(credEnv, 'utf8'));
+  } else if (fs.existsSync(path.join(__dirname, 'firebase-key.json'))) {
+    serviceAccount = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase-key.json'), 'utf8'));
   }
 } catch (error) {
   console.log("បញ្ហាក្នុងការអាន FIREBASE_CREDENTIALS JSON:", error.message);
@@ -405,15 +413,16 @@ if (process.env.NODE_ENV === 'production' && process.env.WebHook_URL) {
   app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_TOKEN}`));
   console.log(`Webhook ត្រូវបានភ្ជាប់ទៅកាន់ ${webhookUrl}`);
 } else {
-  bot.launch();
-  console.log('Bot កំពុងដំណើរការ...');
+  bot.telegram.deleteWebhook().catch(() => {});
+  bot.launch({ dropPendingUpdates: true });
+  console.log('Bot កំពុងដំណើរការ (Polling Mode)...');
 }
 
 app.get('/', (req, res) => {
   res.send('AI Studio Telegram Bot is Running! 🚀');
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5004;
 app.listen(PORT, () => {
   console.log(`Web Server ដំណើរការលើ Port ${PORT}`);
 });
