@@ -98,32 +98,42 @@ def diarize_and_classify_speakers(segments, raw_audio, sr=16000):
     f0_arr = np.array(f0_list)
     cent_arr = np.array(cent_list)
 
-    # Normalized composite biometric score: higher = female, lower = male
-    std_f0 = np.std(f0_arr) if np.std(f0_arr) > 1e-4 else 1.0
-    std_cent = np.std(cent_arr) if np.std(cent_arr) > 1e-4 else 1.0
-    norm_f0 = (f0_arr - np.mean(f0_arr)) / std_f0
-    norm_cent = (cent_arr - np.mean(cent_arr)) / std_cent
+    # Robust classification:
+    # Typical male voice: 85Hz - 155Hz. Typical female voice: 165Hz - 260Hz.
+    median_f0 = float(np.median(f0_arr))
+    p25 = float(np.percentile(f0_arr, 25))
+    p75 = float(np.percentile(f0_arr, 75))
+    iqr_f0 = p75 - p25
 
-    composite_scores = norm_f0 * 1.5 + norm_cent
+    # Check if this audio has both male and female speakers (significant pitch variance and spread)
+    has_dual_speakers = (p25 < 150.0 and p75 > 170.0 and iqr_f0 > 30.0)
 
-    cluster_labels = cluster_speakers_kmeans2(composite_scores)
+    if not has_dual_speakers:
+        # Single dominant speaker video/scene: classify entire clip consistently
+        default_gender = "female" if median_f0 >= 165.0 else "male"
+        for i, seg in enumerate(segments):
+            seg["gender"] = default_gender
+            seg["pitch"] = round(float(f0_arr[i]), 1)
+    else:
+        # Multi-speaker dialogue: cluster based on pitch and spectral centroid
+        std_f0 = np.std(f0_arr) if np.std(f0_arr) > 1e-4 else 1.0
+        std_cent = np.std(cent_arr) if np.std(cent_arr) > 1e-4 else 1.0
+        norm_f0 = (f0_arr - np.mean(f0_arr)) / std_f0
+        norm_cent = (cent_arr - np.mean(cent_arr)) / std_cent
 
-    # 0 = male, 1 = female
-    for i, seg in enumerate(segments):
-        seg["gender"] = "female" if cluster_labels[i] == 1 else "male"
-        seg["pitch"] = round(float(f0_arr[i]), 1)
+        composite_scores = norm_f0 * 1.5 + norm_cent
+        cluster_labels = cluster_speakers_kmeans2(composite_scores)
 
-    # Dialogue context cues to guarantee 100% precision
-    for i, seg in enumerate(segments):
-        txt = seg.get("text", "")
-        # Addressing female character -> Speaker is male
-        if any(w in txt for w in ["秀春", "胡秀春", "姑娘", "嫂子"]):
-            if "我是" not in txt and "我叫" not in txt:
+        # 0 = male, 1 = female
+        for i, seg in enumerate(segments):
+            # Pitch override: if pitch is clearly masculine or feminine, trust absolute pitch
+            if f0_arr[i] < 140.0:
                 seg["gender"] = "male"
-        # Mentioning male character or female responses -> Speaker is female
-        elif any(w in txt for w in ["李明和", "明和", "我妈病了", "在省城", "借钱", "借我"]):
-            if "我是" not in txt and "我叫" not in txt:
+            elif f0_arr[i] > 185.0:
                 seg["gender"] = "female"
+            else:
+                seg["gender"] = "female" if cluster_labels[i] == 1 else "male"
+            seg["pitch"] = round(float(f0_arr[i]), 1)
 
     return segments
 

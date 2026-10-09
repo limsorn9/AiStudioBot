@@ -987,11 +987,12 @@ bot.on('document', async (ctx) => {
       const link = await bot.telegram.getFileLink(doc.file_id);
       const res = await fetch(link.href);
       const srtContent = await res.text();
+      state.lastSrtContent = srtContent;
 
       processSrtFileToVoice({
         ctx,
         srtContent,
-        voiceType: state.srtVoice,
+        voiceType: state.srtVoice || 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)',
         statusMsgId: progressMsg.message_id
       }).catch(err => {
         console.error('SRT process error:', err);
@@ -1034,7 +1035,8 @@ bot.on('document', async (ctx) => {
         fileId: doc.file_id,
         voiceType: state.storyVoice,
         splitMinutes: splitMins,
-        statusMsgId: progressMsg.message_id
+        statusMsgId: progressMsg.message_id,
+        userState: state
       }).catch(err => {
         console.error('Document video process error:', err);
         ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
@@ -1090,7 +1092,8 @@ bot.on('video', async (ctx) => {
         fileId: video.file_id,
         voiceType: state.storyVoice,
         splitMinutes: splitMins,
-        statusMsgId: progressMsg.message_id
+        statusMsgId: progressMsg.message_id,
+        userState: state
       }).catch(err => {
         console.error('Video process error:', err);
         ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
@@ -1143,7 +1146,8 @@ bot.action(['quick_dub_male', 'quick_dub_female', 'quick_dub_both'], async (ctx)
     fileId,
     voiceType: state.storyVoice,
     splitMinutes: splitMins,
-    statusMsgId: progressMsg.message_id
+    statusMsgId: progressMsg.message_id,
+    userState: state
   }).catch(err => {
     console.error('Quick dub process error:', err);
     ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
@@ -1178,6 +1182,46 @@ bot.action('quick_transcript', (ctx) => {
 bot.action('quick_download', (ctx) => {
   ctx.answerCbQuery();
   ctx.reply('⬇️ កំពុងដំណើរការទាញយកវីដេអូពី Link... សូមរង់ចាំបន្តិច!');
+});
+
+// Swap Male <-> Female Characters in Subtitle
+bot.action('swap_srt_gender', async (ctx) => {
+  ctx.answerCbQuery().catch(() => {});
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  if (!state.lastSrtContent) {
+    return ctx.reply('⚠️ មិនមានទិន្នន័យ Subtitle ចាស់ទេ។ សូមផ្ញើឯកសារ .srt មកម្តងទៀត!');
+  }
+
+  // Swap tags (ប្រុស) <-> (ស្រី)
+  const swapped = state.lastSrtContent
+    .replace(/\(ប្រុស\)/g, '%%FEMALE_TMP%%')
+    .replace(/\(ស្រី\)/g, '(ប្រុស)')
+    .replace(/%%FEMALE_TMP%%/g, '(ស្រី)');
+
+  state.lastSrtContent = swapped;
+
+  const tmpPath = path.join(require('os').tmpdir(), `Subtitle_Swapped_${Date.now()}.srt`);
+  fs.writeFileSync(tmpPath, swapped, 'utf-8');
+
+  await ctx.replyWithDocument({ source: tmpPath, filename: 'Subtitle_Swapped.srt' }, {
+    caption: '🔄 បានផ្លាស់ប្តូរភេទតួអង្គ (ប្រុស) ↔ (ស្រី) ក្នុង Subtitle រួចរាល់! ⚡ កំពុងបង្កើតសំឡេងនិយាយថ្មី...',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔄 ប្តូរត្រឡប់ក្រោយវិញ (Swap Again)', callback_data: 'swap_srt_gender' }]
+      ]
+    }
+  });
+
+  const progressMsg = await ctx.reply('🎙️ កំពុងដំណើរការបង្កើតសំឡេងនិយាយថ្មីតាម Subtitle ដែលបានប្តូរភេទ...');
+  processSrtFileToVoice({
+    ctx,
+    srtContent: swapped,
+    voiceType: 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)',
+    statusMsgId: progressMsg.message_id
+  }).catch(err => {
+    ctx.reply(`❌ បរាជ័យក្នុងការបម្លែងសំឡេង៖ ${err.message}`);
+  });
 });
 
 // Express Server Setup

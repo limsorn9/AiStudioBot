@@ -212,8 +212,22 @@ async function batchTranslateWithGroq(lines) {
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const apiKey = getGroqKey();
     try {
-      const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-      const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive spoken Khmer with dramatic feeling. Tag EVERY line with either (ប្រុស) or (ស្រី) for male/female speakers (e.g. [1] (ប្រុស) ... or [2] (ស្រី) ...). Add natural particles (ណា, ហ្នឹង, អ្ហា, ឯង...) and punctuation (..., ?, !). Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
+      const prompt = `You are a legendary Khmer movie voice director and dubbing artist (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
+Translate each numbered line of dialogue below into natural, emotive, and expressive spoken Khmer (ការសន្ទនាភាពយន្ត មានមនោសញ្ចេតនា និងអារម្មណ៍រស់រវើក).
+
+CRITICAL CHARACTER & ROLE ASSIGNMENT RULES:
+1. SPEAKER TAG: You MUST tag EVERY single line with either "(ប្រុស)" if male speaks, or "(ស្រី)" if female speaks based on conversation context, tone, address forms, and pronouns!
+   Example format:
+   [1] (ប្រុស) ឈប់ភ្លាម! ឯងចង់ទៅណា?
+   [2] (ស្រី) ចាស... ម្ដាយខ្ញុំឈឺត្រូវការលុយ...
+   - If only ONE character is speaking (e.g. narrator or solo actor), do NOT alternate; keep ALL lines consistently either (ប្រុស) or (ស្រី)!
+2. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
+3. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
+4. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
+5. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
+6. NO EXTRA TEXT: Output ONLY the numbered translated lines:
+
+${numberedText}`;
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -678,13 +692,15 @@ async function synthesizeSynchronizedVoiceTrack({
 
       if (!rawText) continue;
 
-      // Select male or female voice per segment
+      // Select male or female voice per segment (Role Tag has absolute priority)
       let segVoice = 'km-KH-PisethNeural';
       if (isDualMode) {
-        if (rawText.includes('(ស្រី)') || seg.gender === 'female') {
+        if (rawText.includes('(ស្រី)')) {
           segVoice = 'km-KH-SreymomNeural';
-        } else if (rawText.includes('(ប្រុស)') || seg.gender === 'male') {
+        } else if (rawText.includes('(ប្រុស)')) {
           segVoice = 'km-KH-PisethNeural';
+        } else if (seg.gender === 'female') {
+          segVoice = 'km-KH-SreymomNeural';
         } else {
           segVoice = 'km-KH-PisethNeural';
         }
@@ -799,6 +815,56 @@ function srtToPlainText(srtContent) {
   return textLines.join(' ');
 }
 
+// --- Helper: Parse SRT into timed segments with gender roles ---
+function parseSrtToSegments(srtContent) {
+  const blocks = srtContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split(/\n\s*\n/);
+  const segments = [];
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) continue;
+
+    let timeLineIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes('-->')) {
+        timeLineIdx = i;
+        break;
+      }
+    }
+    if (timeLineIdx === -1) continue;
+
+    const [startStr, endStr] = lines[timeLineIdx].split('-->').map(s => s.trim());
+    const parseTime = (t) => {
+      const parts = t.split(':');
+      if (parts.length < 3) return 0;
+      const h = parseFloat(parts[0]) || 0;
+      const m = parseFloat(parts[1]) || 0;
+      const [s, ms] = (parts[2] || '0').replace(',', '.').split('.');
+      return h * 3600 + m * 60 + (parseFloat(s) || 0) + (parseFloat(ms) || 0) / 1000;
+    };
+
+    const start = parseTime(startStr);
+    const end = parseTime(endStr);
+    const textLines = lines.slice(timeLineIdx + 1).join(' ').trim();
+    if (!textLines) continue;
+
+    let gender = 'male';
+    if (textLines.includes('(ស្រី)')) {
+      gender = 'female';
+    } else if (textLines.includes('(ប្រុស)')) {
+      gender = 'male';
+    }
+
+    segments.push({
+      start,
+      end,
+      text: textLines,
+      gender
+    });
+  }
+  return segments;
+}
+
 // --- Helper: Build SRT from Text ---
 function buildSrtFromText(text, totalDuration = 60) {
   if (!text || !text.trim()) return '';
@@ -866,7 +932,8 @@ async function processStoryVideo({
   fileUrl,
   voiceType = 'សំឡេងប្រុស',
   splitMinutes = 0, // 0 = Full video, 3, 5, 10
-  statusMsgId
+  statusMsgId,
+  userState
 }) {
   const taskId = `task_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
   const workDir = path.join(os.tmpdir(), taskId);
@@ -979,10 +1046,20 @@ async function processStoryVideo({
       for (let i = 0; i < validSegments.length; i++) {
         const seg = validSegments[i];
         let rawKhmer = (translatedTexts[i] || seg.text).trim();
-        rawKhmer = polishKhmerDubbing(rawKhmer, seg.gender);
 
-        const genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
-        const cleanKhmer = genderTag + rawKhmer;
+        // 1. Detect if AI LLM (Groq / Gemini) has already assigned a role tag:
+        let genderTag = '';
+        if (/^\s*\(\s*ស្រី\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ស្រី)')) {
+          genderTag = '(ស្រី) ';
+        } else if (/^\s*\(\s*ប្រុស\s*\)/i.test(rawKhmer) || rawKhmer.includes('(ប្រុស)')) {
+          genderTag = '(ប្រុស) ';
+        } else {
+          // Acoustic pitch fallback only if LLM did not provide a tag
+          genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
+        }
+
+        const polished = polishKhmerDubbing(rawKhmer, genderTag.includes('ស្រី') ? 'female' : 'male');
+        const cleanKhmer = genderTag + polished;
 
         translatedTexts[i] = cleanKhmer;
         if (cleanKhmer) {
@@ -1096,10 +1173,18 @@ async function processStoryVideo({
       }
     }
 
-    // Also send the .srt Subtitle file
+    // Also send the .srt Subtitle file (with instant role swap option)
     if (fs.existsSync(srtPath)) {
+      if (userState) {
+        userState.lastSrtContent = srtContent;
+      }
       await ctx.replyWithDocument({ source: srtPath, filename: 'Subtitle_Khmer.srt' }, {
-        caption: '📄 ឯកសារ Subtitle ភាសាខ្មែរ (.srt) សម្រាប់ប្រើប្រាស់បន្ត។'
+        caption: '📄 ឯកសារ Subtitle ភាសាខ្មែរ (.srt)។\n💡 ប្រសិនបើសំឡេងច្រឡំភេទគ្នា អ្នកអាចចុចប៊ូតុងខាងក្រោមដើម្បីប្តូរភេទ (Swap) ភ្លាមៗ ឬកែអក្សរក្នុង File .srt នេះរួចផ្ញើមក Bot វិញ!',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔄 ប្តូរភេទតួអង្គ (Swap Male ↔ Female)', callback_data: 'swap_srt_gender' }]
+          ]
+        }
       });
     }
 
@@ -1134,15 +1219,33 @@ async function processSrtFileToVoice({
 
   try {
     await updateStatus(`📄 កំពុងអានឯកសារ Subtitle និងស្រង់អត្ថបទ...`);
+    const segments = parseSrtToSegments(srtContent);
     const plainText = srtToPlainText(srtContent);
     if (!plainText.trim()) throw new Error('ឯកសារ SRT គ្មានអត្ថបទ!');
 
     await updateStatus(`🎙️ កំពុងបម្លែងអត្ថបទទៅជាសំឡេងនិយាយខ្មែរ (TTS)...`);
-    const audioPath = await synthesizeKhmerVoice(plainText, voiceType, workDir);
+
+    let audioPath;
+    const hasRoleTags = srtContent.includes('(ស្រី)') || srtContent.includes('(ប្រុស)');
+    const isDualVoice = voiceType.includes('ប្រុស/ស្រី') || voiceType.includes('Auto') || voiceType.includes('Both') || hasRoleTags;
+
+    if (segments.length > 0 && isDualVoice) {
+      console.log(`SRT to Voice: Synthesizing ${segments.length} synchronized dual-role segments...`);
+      const maxEnd = segments.reduce((max, s) => Math.max(max, s.end), 0);
+      audioPath = await synthesizeSynchronizedVoiceTrack({
+        segments,
+        translatedTexts: segments.map(s => s.text),
+        voiceGender: 'សំឡេងប្រុស & ស្រី',
+        totalDuration: maxEnd + 2,
+        workDir
+      });
+    } else {
+      audioPath = await synthesizeKhmerVoice(plainText, voiceType, workDir);
+    }
 
     await updateStatus(`✅ បម្លែងសំឡេងជោគជ័យ 100%! 🎉 កំពុងផ្ញើ File សំឡេង...`);
     await ctx.replyWithAudio({ source: audioPath, filename: 'Khmer_Audio_Track.mp3' }, {
-      caption: `🎙️ សំឡេងខ្មែរពី SRT (${voiceType}) ✨\n💎 បង្កើតដោយ៖ @AiStudioSSOnline_bot`
+      caption: `🎙️ សំឡេងខ្មែរពី SRT (${isDualVoice ? '👫 សំឡេងប្រុស & ស្រី Dual-Voice' : voiceType}) ✨\n💎 បង្កើតដោយ៖ @AiStudioSSOnline_bot`
     });
   } catch (error) {
     console.error('SRT to voice error:', error);
@@ -1162,5 +1265,6 @@ module.exports = {
   synthesizeSynchronizedVoiceTrack,
   getAudioDuration,
   buildSrtFromText,
-  srtToPlainText
+  srtToPlainText,
+  parseSrtToSegments
 };
