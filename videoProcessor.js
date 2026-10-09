@@ -35,28 +35,192 @@ async function downloadFile(url, destPath) {
   });
 }
 
-// --- Helper: Free Google Translate to Khmer ---
-async function translateToKhmer(text) {
-  if (!text || !text.trim()) return '';
-  try {
-    const chunks = [];
-    const maxLen = 1000;
-    for (let i = 0; i < text.length; i += maxLen) {
-      chunks.push(text.slice(i, i + maxLen));
-    }
+// --- In-Memory Translation Cache (Saves Google API requests) ---
+const translationCache = new Map();
 
-    let translated = '';
-    for (const chunk of chunks) {
-      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=km&dt=t&q=${encodeURIComponent(chunk)}`;
-      const res = await fetch(url);
+// --- Desktop User-Agents for rotation (prevents scraper detection) ---
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+// 1. AI Translation via Gemini (0% risk of block, natural Khmer dubbing tone)
+async function translateWithGemini(text) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const prompt = `You are an expert movie translator and dubber. Translate the following text into natural, spoken Khmer language suitable for movie narration. Output ONLY the translated Khmer text, without explanations or English:\n\n${text}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.3 }
+      })
+    });
+    if (res.ok) {
       const data = await res.json();
-      if (data && data[0]) {
-        translated += data[0].map(item => item[0]).join('') + ' ';
-      } else {
-        translated += chunk + ' ';
+      const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (khmer && khmer.trim()) return khmer.trim();
+    }
+  } catch (err) {
+    console.warn('Gemini translation error:', err.message);
+  }
+  return null;
+}
+
+// 2. AI Translation via Groq LLM (ultrafast, 0% risk of block)
+async function translateWithGroq(text) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const prompt = `Translate the following dialogue into natural, spoken Khmer language for video dubbing. Output ONLY the Khmer text:\n\n${text}`;
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const khmer = data.choices?.[0]?.message?.content;
+      if (khmer && khmer.trim()) return khmer.trim();
+    }
+  } catch (err) {
+    console.warn('Groq translation error:', err.message);
+  }
+  return null;
+}
+
+// 3. Robust Free Google Translate with Anti-Ban (Endpoint rotation, headers, caching, rate-limit backoff)
+async function translateChunkWithGoogle(chunk, retry = 2) {
+  const cacheKey = chunk.trim();
+  if (translationCache.has(cacheKey)) {
+    return translationCache.get(cacheKey);
+  }
+
+  // Dual endpoints to rotate if one rate-limits
+  const endpoints = [
+    (q) => `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=km&q=${encodeURIComponent(q)}`,
+    (q) => `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=km&dt=t&q=${encodeURIComponent(q)}`
+  ];
+
+  for (let attempt = 0; attempt <= retry; attempt++) {
+    for (const ep of endpoints) {
+      try {
+        const url = ep(chunk);
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent': getRandomUserAgent(),
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9'
+          }
+        });
+
+        if (res.status === 429) {
+          console.warn(`[Google Rate Limit 429] Backing off before retry ${attempt + 1}...`);
+          await new Promise(r => setTimeout(r, (attempt + 1) * 2000 + Math.random() * 1000));
+          continue;
+        }
+
+        if (res.ok) {
+          const data = await res.json();
+          let translatedText = '';
+          if (Array.isArray(data)) {
+            if (Array.isArray(data[0])) {
+              // Format 1: dict-chrome-ex format [ [ 'translation', 'lang' ] ]
+              if (typeof data[0][0] === 'string' && typeof data[0][1] === 'string' && data[0][1].length <= 5) {
+                translatedText = data.map(item => (Array.isArray(item) ? item[0] : item)).join('');
+              } else {
+                // Format 2: gtx format [ [ ['seg1', 'orig1'], ['seg2', 'orig2'] ] ]
+                translatedText = data[0].map(item => (Array.isArray(item) ? item[0] : item)).join('');
+              }
+            } else if (typeof data[0] === 'string') {
+              translatedText = data[0];
+            }
+          } else if (typeof data === 'string') {
+            translatedText = data;
+          } else if (data && data.sentences) {
+            translatedText = data.sentences.map(s => s.trans).join('');
+          }
+
+          if (translatedText && translatedText.trim()) {
+            translationCache.set(cacheKey, translatedText.trim());
+            if (translationCache.size > 2000) {
+              const firstKey = translationCache.keys().next().value;
+              translationCache.delete(firstKey);
+            }
+            return translatedText.trim();
+          }
+        }
+      } catch (e) {
+        // continue to next endpoint
       }
     }
-    return translated.trim();
+    if (attempt < retry) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+
+  return chunk;
+}
+
+// Master Translate Function:
+// Prioritizes AI (Gemini/Groq) first -> Safe Throttled Google fallback second
+async function translateToKhmer(text) {
+  if (!text || !text.trim()) return '';
+
+  // Priority 1: Gemini AI (1 request for entire video transcript, 0% ban risk)
+  const geminiResult = await translateWithGemini(text);
+  if (geminiResult) return geminiResult;
+
+  // Priority 2: Groq AI (1 request, 0% ban risk)
+  const groqResult = await translateWithGroq(text);
+  if (groqResult) return groqResult;
+
+  // Priority 3: Safe Google Translate (batched up to 2000 chars + jitter delay + caching)
+  try {
+    const maxLen = 2000;
+    const chunks = [];
+    const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+
+    let currentChunk = '';
+    for (const sent of sentences) {
+      if ((currentChunk + ' ' + sent).length > maxLen) {
+        if (currentChunk) chunks.push(currentChunk.trim());
+        currentChunk = sent;
+      } else {
+        currentChunk += (currentChunk ? ' ' : '') + sent;
+      }
+    }
+    if (currentChunk) chunks.push(currentChunk.trim());
+
+    let result = '';
+    for (let i = 0; i < chunks.length; i++) {
+      const translatedChunk = await translateChunkWithGoogle(chunks[i]);
+      result += (result ? ' ' : '') + translatedChunk;
+
+      // Polite delay between chunk requests to avoid IP rate-limiting
+      if (i < chunks.length - 1) {
+        const delayMs = 600 + Math.floor(Math.random() * 500);
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+
+    return result.trim() || text;
   } catch (err) {
     console.error('Translation error:', err.message);
     return text;
