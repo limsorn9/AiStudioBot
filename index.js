@@ -746,39 +746,53 @@ bot.on('document', async (ctx) => {
     return;
   }
 
-  if (state.currentMode === 'waiting_story_video') {
-    const isVideoDoc = (doc.mime_type && doc.mime_type.startsWith('video')) || /\.(mp4|mkv|mov|avi)$/i.test(fileName);
-    if (!isVideoDoc) {
-      return ctx.reply('⚠️ សូមផ្ញើតែឯកសារវីដេអូ (MP4, MKV...) ឬ Subtitle (.srt) ប៉ុណ្ណោះ!');
+  const isVideoDoc = (doc.mime_type && doc.mime_type.startsWith('video')) || /\.(mp4|mkv|mov|avi)$/i.test(fileName);
+  if (isVideoDoc) {
+    // Check Telegram Bot 20MB download limit
+    if (doc.file_size > 20 * 1024 * 1024) {
+      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(doc.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 20MB (ដែនកំណត់ទាញយករបស់ Telegram Bot)!
+
+💡 ដំណោះស្រាយ៖ សូមផ្ញើជា Link វីដេអូ (YouTube, TikTok, Facebook, Drive...) មកកាន់ Bot វិញ ដើម្បីបកប្រែវីដេអូធំៗរហូតដល់ 4GB!`);
     }
 
-    const userData = await getUserInfo(userId);
-    const userCredits = userData.credits || 0;
-    if (userCredits < 1000) {
-      return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
-    }
-    await deductCredits(userId, 1000);
+    if (state.currentMode === 'waiting_story_video') {
+      const userData = await getUserInfo(userId);
+      const userCredits = userData.credits || 0;
+      if (userCredits < 1000) {
+        return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+      }
+      await deductCredits(userId, 1000);
 
-    const splitMins = getSplitMinutes(state.storySplitIndex);
-    const progressMsg = await ctx.reply(`📦 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)
+      const splitMins = getSplitMinutes(state.storySplitIndex);
+      const progressMsg = await ctx.reply(`📦 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)
 🎙️ សំឡេង: ${state.storyVoice}
 🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
 💰 បានកាត់ 1000 Credits
 
 ⏳ កំពុងចាប់ផ្តើមដំណើរការបកប្រែ និងបញ្ចូលសំឡេង...`);
 
-    processStoryVideo({
-      bot,
-      ctx,
-      fileId: doc.file_id,
-      voiceType: state.storyVoice,
-      splitMinutes: splitMins,
-      statusMsgId: progressMsg.message_id
-    }).catch(err => {
-      console.error('Document video process error:', err);
-      ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
-    });
-    return;
+      processStoryVideo({
+        bot,
+        ctx,
+        fileId: doc.file_id,
+        voiceType: state.storyVoice,
+        splitMinutes: splitMins,
+        statusMsgId: progressMsg.message_id
+      }).catch(err => {
+        console.error('Document video process error:', err);
+        ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+      });
+      return;
+    }
+
+    // Direct document video upload fallback: Offer instant dubbing!
+    state.pendingVideoFileId = doc.file_id;
+    return ctx.reply(`🎬 បានទទួល File វីដេអូ: ${fileName} (${(doc.file_size / (1024*1024)).toFixed(1)} MB)\n\n👉 សូមជ្រើសរើសសំឡេងដើម្បីចាប់ផ្តើមបកប្រែ និងបញ្ចូលសំឡេងខ្មែរភ្លាមៗ៖`, Markup.inlineKeyboard([
+      [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'quick_dub_male')],
+      [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'quick_dub_female')],
+      [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'quick_dub_both')],
+      [Markup.button.callback('❌ បោះបង់', 'story_back_to_menu')]
+    ]));
   }
 
   ctx.reply(`📄 បានទទួល File: ${fileName} (${(doc.file_size / 1024).toFixed(1)} KB)`);
@@ -786,48 +800,61 @@ bot.on('document', async (ctx) => {
 
 // Video Handler
 bot.on('video', async (ctx) => {
-  const userId = ctx.from.id;
-  const state = getUserState(userId);
-  const video = ctx.message.video;
+  try {
+    const userId = ctx.from.id;
+    const state = getUserState(userId);
+    const video = ctx.message.video;
 
-  if (state.currentMode === 'waiting_story_video') {
-    const userData = await getUserInfo(userId);
-    const userCredits = userData.credits || 0;
-    if (userCredits < 1000) {
-      return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+    // Check Telegram Bot 20MB limit
+    if (video.file_size > 20 * 1024 * 1024) {
+      return ctx.reply(`⚠️ ឯកសារវីដេអូនេះមានទំហំ ${(video.file_size / (1024*1024)).toFixed(1)}MB ដែលធំជាង 20MB (ដែនកំណត់ទាញយករបស់ Telegram Bot)!
+
+💡 ដំណោះស្រាយ៖ សូមផ្ញើជា Link វីដេអូ (YouTube, TikTok, Facebook, Drive...) មកកាន់ Bot វិញ ដើម្បីបកប្រែវីដេអូធំៗរហូតដល់ 4GB!`);
     }
-    await deductCredits(userId, 1000);
 
-    const splitMins = getSplitMinutes(state.storySplitIndex);
-    const progressMsg = await ctx.reply(`🎬 បានទទួលវីដេអូ! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)
+    if (state.currentMode === 'waiting_story_video') {
+      const userData = await getUserInfo(userId);
+      const userCredits = userData.credits || 0;
+      if (userCredits < 1000) {
+        return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+      }
+      await deductCredits(userId, 1000);
+
+      const splitMins = getSplitMinutes(state.storySplitIndex);
+      const progressMsg = await ctx.reply(`🎬 បានទទួលវីដេអូ! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)
 🎙️ សំឡេង: ${state.storyVoice}
 🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}
 💰 បានកាត់ 1000 Credits
 
 ⏳ កំពុងចាប់ផ្តើមដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ...`);
 
-    processStoryVideo({
-      bot,
-      ctx,
-      fileId: video.file_id,
-      voiceType: state.storyVoice,
-      splitMinutes: splitMins,
-      statusMsgId: progressMsg.message_id
-    }).catch(err => {
-      console.error('Video process error:', err);
-      ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
-    });
-    return;
+      processStoryVideo({
+        bot,
+        ctx,
+        fileId: video.file_id,
+        voiceType: state.storyVoice,
+        splitMinutes: splitMins,
+        statusMsgId: progressMsg.message_id
+      }).catch(err => {
+        console.error('Video process error:', err);
+        ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+      });
+      return;
+    }
+
+    // Direct video upload fallback: Offer instant dubbing options!
+    state.pendingVideoFileId = video.file_id;
+    state.pendingVideoDuration = video.duration;
+    return ctx.reply(`🎬 បានទទួលវីដេអូរបស់អ្នក! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)\n\n👉 សូមជ្រើសរើសសំឡេងដើម្បីចាប់ផ្តើមបកប្រែ និងបញ្ចូលសំឡេងខ្មែរភ្លាមៗ៖`, Markup.inlineKeyboard([
+      [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'quick_dub_male')],
+      [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'quick_dub_female')],
+      [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'quick_dub_both')],
+      [Markup.button.callback('❌ បោះបង់', 'story_back_to_menu')]
+    ]));
+  } catch (err) {
+    console.error('Error in bot.on video:', err);
+    ctx.reply(`❌ មានបញ្ហាក្នុងការទទួលវីដេអូ៖ ${err.message}`).catch(() => {});
   }
-  // Direct video upload fallback: Offer instant dubbing options!
-  state.pendingVideoFileId = video.file_id;
-  state.pendingVideoDuration = video.duration;
-  return ctx.reply(`🎬 បានទទួលវីដេអូរបស់អ្នក! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)\n\n👉 សូមជ្រើសរើសសំឡេងដើម្បីចាប់ផ្តើមបកប្រែ និងបញ្ចូលសំឡេងខ្មែរភ្លាមៗ៖`, Markup.inlineKeyboard([
-    [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'quick_dub_male')],
-    [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'quick_dub_female')],
-    [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'quick_dub_both')],
-    [Markup.button.callback('❌ បោះបង់', 'story_back_to_menu')]
-  ]));
 });
 
 // Quick Dub Action Handlers
@@ -922,6 +949,13 @@ if (cleanWebhook && !process.env.USE_POLLING && !isRenderDead) {
     }
   })();
 }
+
+bot.catch((err, ctx) => {
+  console.error(`[Telegraf Unhandled Error] Update ${ctx?.updateType}:`, err);
+  if (ctx && ctx.reply) {
+    ctx.reply(`⚠️ កំហុសប្រព័ន្ធ៖ ${err.message}`).catch(() => {});
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('AI Studio Telegram Bot is Running! 🚀');

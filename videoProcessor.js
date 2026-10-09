@@ -426,8 +426,15 @@ async function processStoryVideo({
     // 1. Download Video
     await updateStatus(`⏳ ដំណាក់កាល 1/5: កំពុងទាញយកវីដេអូ... [■■□□□□□□□□] 20%`);
     if (fileId) {
-      const link = await bot.telegram.getFileLink(fileId);
-      await downloadFile(link.href, inputVideoPath);
+      try {
+        const link = await bot.telegram.getFileLink(fileId);
+        await downloadFile(link.href, inputVideoPath);
+      } catch (err) {
+        if (err.message && err.message.toLowerCase().includes('file is too big')) {
+          throw new Error('ឯកសារវីដេអូនេះធំជាង 20MB (ដែនកំណត់របស់ Telegram Bot)! ដើម្បីបកប្រែវីដេអូធំ សូមផ្ញើជា Link (YouTube, TikTok, Facebook, Drive...) ឬផ្ញើវីដេអូក្រោម 20MB។');
+        }
+        throw err;
+      }
     } else if (fileUrl) {
       await downloadFile(fileUrl, inputVideoPath);
     } else {
