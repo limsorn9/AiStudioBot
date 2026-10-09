@@ -2,12 +2,12 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const { initializeApp, cert, getApps } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getDatabase } = require('firebase-admin/database');
 
 const fs = require('fs');
 const path = require('path');
 
-// 1. រៀបចំ Firebase
+// 1. រៀបចំ Firebase Realtime Database
 let serviceAccount;
 try {
   const credEnv = (process.env.FIREBASE_CREDENTIALS || '').trim();
@@ -27,12 +27,12 @@ if (serviceAccount) {
     credential: cert(serviceAccount),
     databaseURL: process.env.FIREBASE_DB_URL
   });
-  console.log("Firebase បានតភ្ជាប់ជោគជ័យ");
+  console.log("✅ Firebase Realtime Database បានតភ្ជាប់ជោគជ័យ");
 } else {
-  console.log("មិនទាន់មាន FIREBASE_CREDENTIALS ត្រឹមត្រូវនៅក្នុង .env ទេ");
+  console.log("⚠️ មិនទាន់មាន FIREBASE_CREDENTIALS ត្រឹមត្រូវនៅក្នុង .env ទេ");
 }
 
-const db = getApps().length > 0 ? getFirestore() : null;
+const rtdb = getApps().length > 0 && process.env.FIREBASE_DB_URL ? getDatabase() : null;
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const ADMIN_ID = process.env.ADMIN_ID || '240224709';
 
@@ -66,72 +66,61 @@ const storyToolsMenu = Markup.keyboard([
 ]).resize();
 
 async function saveUser(ctx) {
-  if (!db) return;
+  if (!rtdb) return false;
   try {
     const user = ctx.from;
-    const userRef = db.collection('users').doc(user.id.toString());
-    const doc = await userRef.get();
+    const userRef = rtdb.ref('users/' + user.id);
+    const snap = await userRef.once('value');
     
     let isNewUser = false;
     
-    if (!doc.exists) {
+    if (!snap.exists()) {
       isNewUser = true;
       await userRef.set({
         id: user.id,
-        first_name: user.first_name,
+        first_name: user.first_name || '',
         username: user.username || '',
         credits: 1000,
         invites: 0,
         referredBy: null,
-        joinedAt: FieldValue.serverTimestamp()
+        joinedAt: Date.now()
       });
     }
     return isNewUser;
   } catch (error) {
-    console.error("Error saving user:", error);
+    console.error("Error saving user:", error.message);
     return false;
   }
 }
 
 async function handleReferral(ctx, isNewUser, startPayload) {
-  if (!db || !isNewUser || !startPayload) return;
+  if (!rtdb || !isNewUser || !startPayload) return;
   if (startPayload.startsWith('ref_')) {
     const referrerId = startPayload.split('ref_')[1];
     if (referrerId && referrerId !== ctx.from.id.toString()) {
       try {
-        const referrerRef = db.collection('users').doc(referrerId);
-        await db.runTransaction(async (t) => {
-          const referrerDoc = await t.get(referrerRef);
-          if (referrerDoc.exists) {
-            const currentCredits = referrerDoc.data().credits || 0;
-            const currentInvites = referrerDoc.data().invites || 0;
-            t.update(referrerRef, { 
-              credits: currentCredits + 200,
-              invites: currentInvites + 1 
-            });
-            // ផ្ញើសារប្រាប់អ្នកដែលបានអញ្ជើញ
-            bot.telegram.sendMessage(referrerId, `🎉 អបអរសាទរ! មិត្តភក្តិរបស់អ្នកបានចុះឈ្មោះប្រើប្រាស់ Bot។ អ្នកទទួលបាន +200 Credits 🎁`);
-          }
-        });
-        
-        // Update referredBy for new user
-        await db.collection('users').doc(ctx.from.id.toString()).update({
-          referredBy: referrerId
-        });
+        const referrerRef = rtdb.ref('users/' + referrerId);
+        const refSnap = await referrerRef.once('value');
+        if (refSnap.exists()) {
+          await referrerRef.child('credits').transaction(curr => (curr || 0) + 200);
+          await referrerRef.child('invites').transaction(curr => (curr || 0) + 1);
+          bot.telegram.sendMessage(referrerId, `🎉 អបអរសាទរ! មិត្តភក្តិរបស់អ្នកបានចុះឈ្មោះប្រើប្រាស់ Bot។ អ្នកទទួលបាន +200 Credits 🎁`).catch(() => {});
+        }
+        await rtdb.ref('users/' + ctx.from.id + '/referredBy').set(referrerId);
       } catch (e) {
-        console.error("Referral Error:", e);
+        console.error("Referral Error:", e.message);
       }
     }
   }
 }
 
 async function getUserInfo(userId) {
-  if (!db) return { credits: 0, invites: 0, totalEarned: 0 };
+  if (!rtdb) return { credits: 0, invites: 0, totalEarned: 0 };
   try {
-    const doc = await db.collection('users').doc(userId.toString()).get();
-    if (doc.exists) return doc.data();
+    const snap = await rtdb.ref('users/' + userId).once('value');
+    if (snap.exists()) return snap.val();
   } catch (e) {
-    console.error(e);
+    console.error("getUserInfo Error:", e.message);
   }
   return { credits: 0, invites: 0, totalEarned: 0 };
 }
@@ -163,10 +152,10 @@ bot.hears('💳 បញ្ចូលលុយ (Add Credits)', (ctx) => {
 
 bot.hears('👥 ស្ថិតិអ្នកប្រើប្រាស់', async (ctx) => {
   if (ctx.from.id.toString() !== ADMIN_ID) return;
-  if (!db) return ctx.reply('Database មិនទាន់ដំណើរការទេ');
+  if (!rtdb) return ctx.reply('Database មិនទាន់ដំណើរការទេ');
   try {
-    const snapshot = await db.collection('users').count().get();
-    const total = snapshot.data().count;
+    const snap = await rtdb.ref('users').once('value');
+    const total = snap.exists() ? Object.keys(snap.val()).length : 0;
     ctx.reply(`📊 ស្ថិតិអ្នកប្រើប្រាស់ Bot សរុបមានចំនួន៖ ${total} នាក់`);
   } catch (error) {
     ctx.reply('មានបញ្ហាក្នុងការទាញយកស្ថិតិ។');
@@ -187,21 +176,16 @@ bot.command('addcredit', async (ctx) => {
     return ctx.reply('⚠️ ចំនួន credits ត្រូវតែជាលេខ។');
   }
 
-  if (!db) return ctx.reply('Database មិនដំណើរការទេ។');
+  if (!rtdb) return ctx.reply('Database មិនដំណើរការទេ។');
 
   try {
-    const userRef = db.collection('users').doc(userId);
-    const doc = await userRef.get();
-    if (!doc.exists) {
+    const userRef = rtdb.ref('users/' + userId);
+    const snap = await userRef.once('value');
+    if (!snap.exists()) {
       return ctx.reply('⚠️ រកមិនឃើញ User នេះក្នុងប្រព័ន្ធទេ។ សូមពិនិត្យមើល ID ម្ដងទៀត។');
     }
     
-    await db.runTransaction(async (t) => {
-      const userDoc = await t.get(userRef);
-      const currentCredits = userDoc.data().credits || 0;
-      t.update(userRef, { credits: currentCredits + amount });
-    });
-    
+    await userRef.child('credits').transaction(curr => (curr || 0) + amount);
     ctx.reply(`✅ ជោគជ័យ! បានបញ្ចូល ${amount} credits ទៅកាន់ User ${userId} រួចរាល់។`);
     bot.telegram.sendMessage(userId, `🎉 អបអរសាទរ! Admin បានបញ្ចូល ${amount} Credits ចូលទៅក្នុងគណនីរបស់អ្នក! ប្រើប្រាស់មុខងារ Bot បានឥឡូវនេះ!`).catch(()=>{});
   } catch (error) {
@@ -407,15 +391,22 @@ bot.hears('⬇️ ទាញយករឿង', (ctx) => ctx.reply('សូមផ្
 const app = express();
 app.use(express.json());
 
-if (process.env.NODE_ENV === 'production' && process.env.WebHook_URL) {
-  const webhookUrl = `${process.env.WebHook_URL}/bot${process.env.TELEGRAM_TOKEN}`;
-  bot.telegram.setWebhook(webhookUrl);
+const rawWebhook = process.env.WebHook_URL || '';
+const cleanWebhook = rawWebhook.trim().replace(/\/+$/, '');
+
+if (cleanWebhook && !process.env.USE_POLLING) {
+  const webhookUrl = `${cleanWebhook}/bot${process.env.TELEGRAM_TOKEN}`;
+  bot.telegram.setWebhook(webhookUrl)
+    .then(() => console.log(`✅ Webhook ត្រូវបានភ្ជាប់ទៅកាន់ ${webhookUrl}`))
+    .catch((err) => console.error('❌ Webhook error:', err.message));
   app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_TOKEN}`));
-  console.log(`Webhook ត្រូវបានភ្ជាប់ទៅកាន់ ${webhookUrl}`);
 } else {
   bot.telegram.deleteWebhook().catch(() => {});
-  bot.launch({ dropPendingUpdates: true });
-  console.log('Bot កំពុងដំណើរការ (Polling Mode)...');
+  bot.launch({ dropPendingUpdates: false }).then(() => {
+    console.log('✅ Bot កំពុងដំណើរការ (Polling Mode)...');
+  }).catch((err) => {
+    console.error('❌ Polling launch failed:', err.message);
+  });
 }
 
 app.get('/', (req, res) => {
