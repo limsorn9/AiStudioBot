@@ -13,12 +13,12 @@ const keyFile = path.join(__dirname, 'firebase-key.json');
 
 try {
   const credEnv = (process.env.FIREBASE_CREDENTIALS || '').trim();
-  if (credEnv.startsWith('{')) {
+  if (fs.existsSync(keyFile)) {
+    serviceAccount = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
+  } else if (credEnv.startsWith('{')) {
     serviceAccount = JSON.parse(credEnv);
   } else if (credEnv && fs.existsSync(credEnv)) {
     serviceAccount = JSON.parse(fs.readFileSync(credEnv, 'utf8'));
-  } else if (fs.existsSync(keyFile)) {
-    serviceAccount = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
   }
 } catch (error) {
   console.log("បញ្ហាក្នុងការអាន Firebase Credentials:", error.message);
