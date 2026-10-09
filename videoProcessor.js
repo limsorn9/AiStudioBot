@@ -118,12 +118,16 @@ async function batchTranslateWithGemini(lines) {
       const prompt = `You are a legendary Khmer movie voice director and dubbing artist (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
 Translate each numbered line of dialogue below into natural, emotive, and expressive spoken Khmer (ការសន្ទនាភាពយន្ត មានមនោសញ្ចេតនា និងអារម្មណ៍រស់រវើក).
 
-CRITICAL DUBBING & EMOTION RULES:
-1. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
-2. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ) instead of rigid textbook translations.
-3. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
-4. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
-5. NO EXTRA TEXT: Output ONLY the numbered translated lines.
+CRITICAL DUBBING & ROLE RULES:
+1. SPEAKER TAG: You MUST tag EVERY single line with either "(ប្រុស)" if male speaks, or "(ស្រី)" if female speaks based on conversation context, tone, and pronouns!
+Example format:
+[1] (ប្រុស) ស៊ូឈុនមានរឿងអីមែនទេ?
+[2] (ស្រី) ចាស... ម្ដាយខ្ញុំឈឺត្រូវការលុយ...
+2. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
+3. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ).
+4. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
+5. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
+6. NO EXTRA TEXT: Output ONLY the numbered translated lines.
 
 ${numberedText}`;
 
@@ -166,7 +170,7 @@ async function batchTranslateWithGroq(lines) {
   if (!apiKey) return null;
   try {
     const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-    const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive, emotive spoken Khmer with dramatic feeling and natural dialogue particles (ណា, ហ្នឹង, អ្ហា, ឯង, អើយ...). Add punctuation (..., ?, !) for natural breathing pauses. Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
+    const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive spoken Khmer with dramatic feeling. Tag EVERY line with either (ប្រុស) or (ស្រី) for male/female speakers (e.g. [1] (ប្រុស) ... or [2] (ស្រី) ...). Add natural particles (ណា, ហ្នឹង, អ្ហា, ឯង...) and punctuation (..., ?, !). Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -599,14 +603,12 @@ async function synthesizeSynchronizedVoiceTrack({
     throw new Error('កញ្ចប់ msedge-tts មិនទាន់ដំឡើងលើ VPS ទេ។ សូមវាយបញ្ជា "npm install" លើ VPS ជាមុនសិន!');
   }
 
-  const voiceName = (voiceGender && voiceGender.includes('ស្រី'))
-    ? 'km-KH-SreymomNeural'
-    : 'km-KH-PisethNeural';
+  const isDualMode = !voiceGender || voiceGender.includes('ប្រុស & ស្រី') || voiceGender.includes('Auto') || voiceGender.includes('Both');
 
   const ttsDir = path.join(workDir, 'synced_tts');
   fs.mkdirSync(ttsDir, { recursive: true });
 
-  console.log(`🎙️ Synthesizing ${segments.length} dialogue segments synchronized to video timestamps...`);
+  console.log(`🎙️ Synthesizing ${segments.length} dialogue segments (Dual Voice: ${isDualMode ? 'Enabled' : voiceGender})...`);
 
   // 1. Synthesize all segments in parallel batches (concurrency: 3)
   const segmentAudios = new Array(segments.length);
@@ -617,17 +619,36 @@ async function synthesizeSynchronizedVoiceTrack({
     for (let j = i; j < Math.min(i + concurrency, segments.length); j++) {
       const segIndex = j;
       const seg = segments[segIndex];
-      const text = (translatedTexts[segIndex] || seg.text || '').trim();
+      const rawText = (translatedTexts[segIndex] || seg.text || '').trim();
 
-      if (!text) continue;
+      if (!rawText) continue;
+
+      // Select male or female voice per segment
+      let segVoice = 'km-KH-PisethNeural';
+      if (isDualMode) {
+        if (rawText.includes('(ស្រី)')) {
+          segVoice = 'km-KH-SreymomNeural';
+        } else if (rawText.includes('(ប្រុស)')) {
+          segVoice = 'km-KH-PisethNeural';
+        } else {
+          segVoice = 'km-KH-PisethNeural';
+        }
+      } else if (voiceGender && voiceGender.includes('ស្រី')) {
+        segVoice = 'km-KH-SreymomNeural';
+      } else {
+        segVoice = 'km-KH-PisethNeural';
+      }
+
+      // Strip speaker tag (ប្រុស)/(ស្រី) from TTS text so it doesn't speak "ប្រុស" / "ស្រី"
+      const cleanTtsText = rawText.replace(/^\s*\((ប្រុស|ស្រី)\)\s*/i, '').trim() || rawText;
 
       batch.push((async () => {
         try {
           const segDir = path.join(ttsDir, `seg_${segIndex}`);
           fs.mkdirSync(segDir, { recursive: true });
           const tts = new MsEdgeTTS();
-          await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-          const res = await tts.toFile(segDir, text);
+          await tts.setMetadata(segVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+          const res = await tts.toFile(segDir, cleanTtsText);
           const audioFile = res.audioFilePath;
 
           // Get actual duration
@@ -934,9 +955,10 @@ async function processStoryVideo({
 
     for (const part of finalVideoParts) {
       const partLabel = finalVideoParts.length > 1 ? ` (ភាគទី ${part.partNumber})` : '';
-      const caption = `🎬 វីដេអូបកប្រែរួចរាល់${partLabel} ✨\n🎙️ សំឡេង៖ ${voiceType}\n⏱️ រយៈពេល៖ ~${Math.round(duration)} វិនាទី\n💎 ផលិតដោយ៖ @AiStudioSSOnline_bot`;
-      
       const stat = fs.statSync(part.path);
+      const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
+      const caption = `🎉 បកប្រែរឿងរួចរាល់${partLabel} (Quality 720p HD)! ✨\n🎙️ សម្លេង៖ ${voiceType} | 📺 កម្រិតរូបភាព៖ 720p HD | 📦 ទំហំ៖ ${sizeMb}MB\n⏱️ រយៈពេល៖ ~${Math.round(duration)} វិនាទី\n💎 ផលិតដោយ៖ @AiStudioSSOnline_bot`;
+      
       // If video < 50MB send as video, else send as document
       if (stat.size < 49 * 1024 * 1024) {
         await ctx.replyWithVideo({ source: part.path }, { caption });

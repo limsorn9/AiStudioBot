@@ -167,7 +167,7 @@ function getUserState(userId) {
   const uid = userId.toString();
   if (!userSessions.has(uid)) {
     userSessions.set(uid, {
-      storyVoice: 'សំឡេងប្រុស',
+      storyVoice: 'សំឡេងប្រុស & ស្រី',
       storySplitIndex: 0,
       srtVoice: 'សំឡេងធម្មតា ប្រុស/ស្រី Auto (Free)',
       currentMode: null,
