@@ -947,12 +947,26 @@ if (cleanWebhook && !process.env.USE_POLLING && !isRenderDead) {
   app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_TOKEN}`));
 } else {
   (async () => {
-    try {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-      await bot.launch({ dropPendingUpdates: true });
-      console.log('✅ Bot កំពុងដំណើរការ (Polling Mode លើ VPS)...');
-    } catch (err) {
-      console.error('❌ Polling launch failed:', err.message);
+    let started = false;
+    let attempts = 0;
+    while (!started && attempts < 15) {
+      try {
+        attempts++;
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+        await bot.launch({ dropPendingUpdates: true });
+        console.log(`✅ Bot កំពុងដំណើរការជោគជ័យ (Polling Mode តាម ${bot.telegram.options.apiRoot})...`);
+        started = true;
+      } catch (err) {
+        console.error(`❌ Polling launch attempt ${attempts} failed:`, err.message);
+        if (attempts >= 5 && bot.telegram.options.apiRoot !== 'https://api.telegram.org') {
+          console.log('⚠️ Local Bot API (8081) មិនទាន់ឆ្លើយតប កំពុងផ្លាស់ប្តូរទៅកាន់ https://api.telegram.org ជាបណ្តោះអាសន្ន...');
+          bot.telegram.options.apiRoot = 'https://api.telegram.org';
+        }
+        if (attempts < 15) {
+          console.log('⏳ នឹងព្យាយាមភ្ជាប់ឡើងវិញក្នុងរយៈពេល 3 វិនាទី...');
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
     }
   })();
 }

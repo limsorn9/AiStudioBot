@@ -29,20 +29,21 @@ docker run -d \
   --restart always \
   -p 8081:8081 \
   -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api \
-  aiogram/telegram-bot-api:latest \
-  --api-id=2040 \
-  --api-hash=b18441a1ff607e10a989891a5462e627 \
-  --local \
-  --dir=/var/lib/telegram-bot-api \
-  --http-port=8081
+  -e TELEGRAM_API_ID="2040" \
+  -e TELEGRAM_API_HASH="b18441a1ff607e10a989891a5462e627" \
+  -e TELEGRAM_LOCAL="1" \
+  aiogram/telegram-bot-api:latest
 
-sleep 3
+echo "⏳ កំពុងរង់ចាំ Telegram Bot API Server Start (ប្រហែល 5 វិនាទី)..."
+sleep 5
 
-# ពិនិត្យមើលថាតើ Server ដើរឬនៅ
-if curl -s http://127.0.0.1:8081 > /dev/null; then
+# បង្ហាញ Docker status និង Logs ប្រសិនបើមានបញ្ហា
+docker ps -f name=telegram-bot-api
+if curl -s http://127.0.0.1:8081 > /dev/null 2>&1; then
     echo "✅ Telegram Local Bot API កំពុងដំណើរការលើ http://127.0.0.1:8081 រួចរាល់!"
 else
-    echo "⚠️ កំពុងរង់ចាំ Container Start..."
+    echo "🔍 Logs របស់ Telegram Bot API Container:"
+    docker logs --tail 20 telegram-bot-api
 fi
 
 echo "⚙️ [4/5] កំពុងកំណត់ .env របស់ Bot..."
