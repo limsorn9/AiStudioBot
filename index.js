@@ -324,6 +324,32 @@ bot.command('addcredit', async (ctx) => {
   }
 });
 
+// Command: /setkey or /gemini to set Gemini AI key directly
+bot.command(['setkey', 'gemini'], async (ctx) => {
+  const parts = ctx.message.text.split(/\s+/);
+  if (parts.length < 2) {
+    return ctx.reply('👉 របៀបប្រើ៖ `/setkey <GEMINI_API_KEY>`\nឧទាហរណ៍៖ `/setkey AIzaSyD...`\n\n(អ្នកអាចបង្កើត Gemini API Key ឥតគិតថ្លៃបានពី https://aistudio.google.com)', { parse_mode: 'Markdown' });
+  }
+  const key = parts[1].trim();
+  process.env.GEMINI_API_KEY = key;
+  process.env.GEMINI_API_KEYS = key;
+  try {
+    const envPath = path.join(__dirname, '.env');
+    if (fs.existsSync(envPath)) {
+      let envContent = fs.readFileSync(envPath, 'utf-8');
+      if (envContent.includes('GEMINI_API_KEY=')) {
+        envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${key}`);
+      } else {
+        envContent += `\nGEMINI_API_KEY=${key}\n`;
+      }
+      fs.writeFileSync(envPath, envContent, 'utf-8');
+    }
+  } catch (e) {
+    console.error('Failed to write .env:', e);
+  }
+  return ctx.reply(`✅ បានកំណត់ Gemini API Key ជោគជ័យ! 🎉\nរាល់ការបកប្រែវីដេអូ និងរឿងបន្ទាប់ នឹងប្រើប្រាស់ Gemini AI ដោយផ្ទាល់ ដើម្បីបង្កើតសំឡេងនិយាយបែបតួសម្តែង និងបកប្រែមានមនោសញ្ចេតនាល្អបំផុត!`);
+});
+
 bot.start(async (ctx) => {
   const isNewUser = await saveUser(ctx);
   const startPayload = ctx.message.text.split(' ')[1]; // Get start parameter

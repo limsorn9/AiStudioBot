@@ -626,9 +626,9 @@ async function synthesizeSynchronizedVoiceTrack({
       // Select male or female voice per segment
       let segVoice = 'km-KH-PisethNeural';
       if (isDualMode) {
-        if (rawText.includes('(ស្រី)')) {
+        if (rawText.includes('(ស្រី)') || seg.gender === 'female') {
           segVoice = 'km-KH-SreymomNeural';
-        } else if (rawText.includes('(ប្រុស)')) {
+        } else if (rawText.includes('(ប្រុស)') || seg.gender === 'male') {
           segVoice = 'km-KH-PisethNeural';
         } else {
           segVoice = 'km-KH-PisethNeural';
@@ -923,7 +923,13 @@ async function processStoryVideo({
 
       for (let i = 0; i < validSegments.length; i++) {
         const seg = validSegments[i];
-        const cleanKhmer = (translatedTexts[i] || seg.text).trim();
+        let cleanKhmer = (translatedTexts[i] || seg.text).trim();
+        // Automatically attach (ប្រុស) or (ស្រី) based on audio pitch if not already present
+        if (!cleanKhmer.startsWith('(ប្រុស)') && !cleanKhmer.startsWith('(ស្រី)')) {
+          const genderTag = seg.gender === 'female' ? '(ស្រី) ' : '(ប្រុស) ';
+          cleanKhmer = genderTag + cleanKhmer;
+        }
+        translatedTexts[i] = cleanKhmer;
         if (cleanKhmer) {
           translatedSegments.push(cleanKhmer);
           const startStr = formatSrtTime(Math.max(0, seg.start));
@@ -981,13 +987,22 @@ async function processStoryVideo({
       const filter = `[1:a]volume=0.85[bgm];[2:a]volume=1.25[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
       await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${cleanBgmPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
     } else {
-      // Smart Dynamic Ducking: sidechaincompress ducks original foreign voice down by -22dB when Khmer voice speaks
-      console.log('Rendering with Smart Sidechain Ducking...');
-      const sidechainFilter = `[0:a][1:a]sidechaincompress=threshold=0.03:ratio=12:attack=15:release=350[bgm_ducked];[bgm_ducked]volume=0.85[bgm];[1:a]volume=1.3[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
+      // 100% Dialogue Elimination: Center vocal cancellation + Active Speech Segment Muting (-40dB)
+      console.log('Rendering with Center Vocal Cut & Active Dialogue Gating...');
+      let muteExpr = '0';
+      if (validSegments && validSegments.length > 0) {
+        muteExpr = validSegments.map(s => `between(t,${Math.max(0, s.start - 0.15).toFixed(2)},${(s.end + 0.15).toFixed(2)})`).join('+');
+      }
+      // 1. stereotools removes the center speech channel
+      // 2. volume drops to 0.01 (-40dB) whenever original dialogue is present
+      // 3. volume restores to 0.85 during scene pauses, action, and BGM
+      // 4. Khmer voice track plays at loud and clear 1.35 volume
+      const vocalCutFilter = `[0:a]stereotools=mlev=0.0:slev=1.2,volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
       try {
-        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${sidechainFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${vocalCutFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
       } catch (err) {
-        const fallbackFilter = `[0:a]volume=0.12[a0];[1:a]volume=1.3[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
+        console.warn('Vocal cut filter error, falling back to volume gate:', err.message);
+        const fallbackFilter = `[0:a]volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
         await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${fallbackFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
       }
     }
