@@ -115,11 +115,15 @@ async function batchTranslateWithGemini(lines) {
     const apiKey = getGeminiKey();
     try {
       const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-      const prompt = `You are a professional movie dialogue translator into natural spoken Khmer language.
-Translate each numbered line below into spoken Khmer for movie narration and dubbing.
-IMPORTANT RULES:
-1. You MUST keep the exact same [number] prefix for each line.
-2. Output ONLY the numbered translated lines in spoken Khmer, without introductory text or explanations.
+      const prompt = `You are a legendary Khmer movie voice director and dubbing artist (អ្នកបញ្ចូលសំឡេងភាពយន្តអាជីព).
+Translate each numbered line of dialogue below into natural, emotive, and expressive spoken Khmer (ការសន្ទនាភាពយន្ត មានមនោសញ្ចេតនា និងអារម្មណ៍រស់រវើក).
+
+CRITICAL DUBBING & EMOTION RULES:
+1. EMOTION & DRAMA: Express the characters' true feelings (កម្សត់, រំភើប, ខឹង, ភ្ញាក់ផ្អើល, សប្បាយ, ស្នេហា). Match the drama of the scene!
+2. SPOKEN KHMER PARTICLES: Use lively spoken Khmer phrasing and expressive particles (ដូចជា៖ ណា, ហ្នឹង, អ្ហា, ឯង, អើយ, ទេតើ, ហ្អី, ណាស់, ពិតមែនហើយ) instead of rigid textbook translations.
+3. BREATHING & CADENCE: Add natural punctuation (..., ?, !, ។) to give the voice actor natural pauses, rhythm, and breath.
+4. STRICT NUMBERING: Keep the exact same [number] prefix for each line.
+5. NO EXTRA TEXT: Output ONLY the numbered translated lines.
 
 ${numberedText}`;
 
@@ -162,7 +166,7 @@ async function batchTranslateWithGroq(lines) {
   if (!apiKey) return null;
   try {
     const numberedText = lines.map((l, idx) => `[${idx + 1}] ${l}`).join('\n');
-    const prompt = `Translate each numbered line into natural spoken Khmer for video dubbing. Keep [number] prefixes. Output ONLY the translated lines:\n\n${numberedText}`;
+    const prompt = `You are a professional Khmer movie dubbing artist. Translate each numbered line into expressive, emotive spoken Khmer with dramatic feeling and natural dialogue particles (ណា, ហ្នឹង, អ្ហា, ឯង, អើយ...). Add punctuation (..., ?, !) for natural breathing pauses. Keep [number] prefixes. Output ONLY translated lines:\n\n${numberedText}`;
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -242,7 +246,7 @@ async function translateWithGemini(text) {
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const apiKey = getGeminiKey();
     try {
-      const prompt = `You are an expert movie translator and dubber. Translate the following text into natural, spoken Khmer language suitable for movie narration. Output ONLY the translated Khmer text, without explanations or English:\n\n${text}`;
+      const prompt = `You are a professional Khmer movie voice actor. Translate the following dialogue into expressive, emotive spoken Khmer with natural emotion, feeling, and conversational particles (ណា, ហ្នឹង, អ្ហា, ឯង...). Output ONLY the translated Khmer text:\n\n${text}`;
       const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
@@ -274,7 +278,7 @@ async function translateWithGroq(text) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return null;
   try {
-    const prompt = `Translate the following dialogue into natural, spoken Khmer language for video dubbing. Output ONLY the Khmer text:\n\n${text}`;
+    const prompt = `Translate the following dialogue into expressive, emotive spoken Khmer with dramatic feeling for movie dubbing (ប្រើពាក្យសន្ទនា ណា, ហ្នឹង, អ្ហា...). Output ONLY the Khmer text:\n\n${text}`;
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -568,9 +572,10 @@ async function synthesizeKhmerVoice(text, voiceGender, outputDir) {
   for (let i = 0; i < textChunks.length; i++) {
     const tts = new MsEdgeTTS();
     await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const partPath = path.join(outputDir, `tts_part_${i}.mp3`);
-    await tts.toFile(partPath, textChunks[i]);
-    audioPartPaths.push(partPath);
+    const partDir = path.join(outputDir, `tts_part_${i}`);
+    fs.mkdirSync(partDir, { recursive: true });
+    const res = await tts.toFile(partDir, textChunks[i]);
+    audioPartPaths.push(res.audioFilePath);
   }
 
   // Concat all mp3 parts with ffmpeg
@@ -578,8 +583,130 @@ async function synthesizeKhmerVoice(text, voiceGender, outputDir) {
   const listContent = audioPartPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
   fs.writeFileSync(listFile, listContent);
   const finalAudioPath = path.join(outputDir, 'voice_full.mp3');
-  await runCmd(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${finalAudioPath}"`);
+  await runCmd(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c:a libmp3lame -b:a 48k "${finalAudioPath}"`);
   return finalAudioPath;
+}
+
+// --- Helper: Build Synchronized Khmer Voice Track Matching Character Lip-Movement & Breath Gaps ---
+async function synthesizeSynchronizedVoiceTrack({
+  segments,
+  translatedTexts,
+  voiceGender,
+  totalDuration,
+  workDir
+}) {
+  if (!loadEdgeTTS()) {
+    throw new Error('កញ្ចប់ msedge-tts មិនទាន់ដំឡើងលើ VPS ទេ។ សូមវាយបញ្ជា "npm install" លើ VPS ជាមុនសិន!');
+  }
+
+  const voiceName = (voiceGender && voiceGender.includes('ស្រី'))
+    ? 'km-KH-SreymomNeural'
+    : 'km-KH-PisethNeural';
+
+  const ttsDir = path.join(workDir, 'synced_tts');
+  fs.mkdirSync(ttsDir, { recursive: true });
+
+  console.log(`🎙️ Synthesizing ${segments.length} dialogue segments synchronized to video timestamps...`);
+
+  // 1. Synthesize all segments in parallel batches (concurrency: 3)
+  const segmentAudios = new Array(segments.length);
+  const concurrency = 3;
+
+  for (let i = 0; i < segments.length; i += concurrency) {
+    const batch = [];
+    for (let j = i; j < Math.min(i + concurrency, segments.length); j++) {
+      const segIndex = j;
+      const seg = segments[segIndex];
+      const text = (translatedTexts[segIndex] || seg.text || '').trim();
+
+      if (!text) continue;
+
+      batch.push((async () => {
+        try {
+          const segDir = path.join(ttsDir, `seg_${segIndex}`);
+          fs.mkdirSync(segDir, { recursive: true });
+          const tts = new MsEdgeTTS();
+          await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+          const res = await tts.toFile(segDir, text);
+          const audioFile = res.audioFilePath;
+
+          // Get actual duration
+          let dur = await getAudioDuration(audioFile);
+          const targetDur = Math.max(0.6, seg.end - seg.start);
+
+          // Lip-Sync speed adjustment: if speech is longer than speaker's window, gently adjust tempo
+          let finalAudioFile = audioFile;
+          if (dur > targetDur * 1.15 && dur > 1.2) {
+            const speed = Math.min(1.30, dur / targetDur);
+            const tunedFile = path.join(segDir, 'tuned.mp3');
+            try {
+              await runCmd(`ffmpeg -y -i "${audioFile}" -filter:a "atempo=${speed.toFixed(2)}" -c:a libmp3lame -b:a 48k "${tunedFile}"`);
+              dur = dur / speed;
+              finalAudioFile = tunedFile;
+            } catch (e) {
+              // fallback to normal audio if atempo fails
+            }
+          }
+
+          segmentAudios[segIndex] = {
+            start: Math.max(0, seg.start),
+            end: Math.max(seg.start + 0.5, seg.end),
+            duration: dur,
+            audioPath: finalAudioFile
+          };
+        } catch (err) {
+          console.warn(`Failed to synthesize segment #${segIndex}:`, err.message);
+        }
+      })());
+    }
+    await Promise.all(batch);
+  }
+
+  // 2. Assemble Timeline Clips with Exact Silence Padding for Breathing & Lip-Sync
+  let cursorTime = 0.0;
+  const timelineClips = [];
+  let silenceIdx = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const item = segmentAudios[i];
+    if (!item || !fs.existsSync(item.audioPath)) continue;
+
+    // A. Pre-speech gap: silence for natural background music and human breathing
+    const leadingGap = item.start - cursorTime;
+    if (leadingGap > 0.08) {
+      const silencePath = path.join(ttsDir, `silence_${silenceIdx++}.mp3`);
+      await runCmd(`ffmpeg -y -f lavfi -i anullsrc=r=24000:cl=mono -t ${leadingGap.toFixed(3)} -c:a libmp3lame -b:a 48k "${silencePath}"`);
+      timelineClips.push(silencePath);
+      cursorTime += leadingGap;
+    }
+
+    // B. Character speech clip
+    timelineClips.push(item.audioPath);
+    cursorTime += item.duration;
+  }
+
+  // C. Trailing gap to video end
+  const trailingGap = totalDuration - cursorTime;
+  if (trailingGap > 0.08) {
+    const endSilencePath = path.join(ttsDir, `silence_end.mp3`);
+    await runCmd(`ffmpeg -y -f lavfi -i anullsrc=r=24000:cl=mono -t ${trailingGap.toFixed(3)} -c:a libmp3lame -b:a 48k "${endSilencePath}"`);
+    timelineClips.push(endSilencePath);
+    cursorTime += trailingGap;
+  }
+
+  // 3. Concat all timeline clips into Master Synced Voice Track
+  if (timelineClips.length === 0) {
+    throw new Error('មិនមានសំឡេងនិយាយណាត្រូវបានបង្កើតទេ!');
+  }
+
+  const concatListPath = path.join(ttsDir, 'timeline_concat.txt');
+  const concatContent = timelineClips.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+  fs.writeFileSync(concatListPath, concatContent, 'utf-8');
+
+  const masterSyncedVoicePath = path.join(workDir, 'master_synced_voice.mp3');
+  await runCmd(`ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c:a libmp3lame -b:a 64k "${masterSyncedVoicePath}"`);
+
+  return masterSyncedVoicePath;
 }
 
 // --- Helper: Parse & Convert SRT to Plain Text ---
@@ -641,6 +768,17 @@ async function getVideoDuration(videoPath) {
     return isNaN(dur) ? 60 : dur;
   } catch {
     return 60;
+  }
+}
+
+// --- Helper: Get Audio Duration in Seconds ---
+async function getAudioDuration(audioPath) {
+  try {
+    const { stdout } = await runCmd(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`);
+    const dur = parseFloat(stdout.trim());
+    return isNaN(dur) ? 2 : dur;
+  } catch {
+    return 2;
   }
 }
 
@@ -711,11 +849,13 @@ async function processStoryVideo({
 
     let srtContent = '';
     const translatedSegments = [];
+    let validSegments = [];
+    let translatedTexts = [];
 
     if (hasSegments) {
       console.log(`Processing ${transcription.segments.length} dialogue segments with Batch AI Translation...`);
-      const validSegments = transcription.segments.filter(s => s && s.text && s.text.trim());
-      const translatedTexts = await batchTranslateSegments(validSegments, transcription.language);
+      validSegments = transcription.segments.filter(s => s && s.text && s.text.trim());
+      translatedTexts = await batchTranslateSegments(validSegments, transcription.language);
 
       for (let i = 0; i < validSegments.length; i++) {
         const seg = validSegments[i];
@@ -749,13 +889,29 @@ async function processStoryVideo({
     // Save Subtitle SRT
     fs.writeFileSync(srtPath, srtContent, 'utf-8');
 
-    // 4. Synthesize Khmer Voice
-    await updateStatus(`🔊 ដំណាក់កាល 4/5: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរ (TTS)... [■■■■■■■■□□] 80%`);
-    const voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
+    // 4. Synthesize Khmer Voice (Synchronized with lip movements & natural breathing gaps)
+    await updateStatus(`🔊 ដំណាក់កាល 4/5: កំពុងបញ្ចូលសំឡេងនិយាយខ្មែរតាមមាត់តួអង្គ (Lip-Sync & Emotion)... [■■■■■■■■□□] 80%`);
+    let voiceAudioPath;
+    if (validSegments && validSegments.length > 0) {
+      try {
+        voiceAudioPath = await synthesizeSynchronizedVoiceTrack({
+          segments: validSegments,
+          translatedTexts,
+          voiceGender: voiceType,
+          totalDuration: duration,
+          workDir
+        });
+      } catch (syncErr) {
+        console.warn('Synchronized TTS failed, falling back to full text TTS:', syncErr.message);
+        voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
+      }
+    } else {
+      voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
+    }
 
     // 5. Duck & Dub with FFmpeg
     await updateStatus(`🎬 ដំណាក់កាល 5/5: កំពុង Render វីដេអូបកប្រែរួច (Ducking BGM)... [■■■■■■■■■□] 95%`);
-    const filter = `[0:a]volume=0.2[a0];[1:a]volume=1.2[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
+    const filter = `[0:a]volume=0.3[a0];[1:a]volume=1.3[a1];[a0][a1]amix=inputs=2:duration=first[aout]`;
     await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
 
     // 6. Split if requested
@@ -852,6 +1008,8 @@ module.exports = {
   processSrtFileToVoice,
   translateToKhmer,
   synthesizeKhmerVoice,
+  synthesizeSynchronizedVoiceTrack,
+  getAudioDuration,
   buildSrtFromText,
   srtToPlainText
 };
