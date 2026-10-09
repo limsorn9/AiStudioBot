@@ -498,11 +498,130 @@ async function translateToKhmer(text) {
   }
 }
 
-// --- Helper: Transcribe Audio using Whisper AI, Groq or Gemini ---
+// --- Helper: Gemini Multimodal Audio Listening & Gender Classification ---
+async function transcribeAndDiarizeWithGemini(audioPath) {
+  const keys = getAllGeminiKeys();
+  if (!keys.length) return null;
+
+  try {
+    const workDir = path.dirname(audioPath);
+    const mp3Path = path.join(workDir, `gemini_audio_${Date.now()}.mp3`);
+    try {
+      await runCmd(`ffmpeg -y -i "${audioPath}" -ar 16000 -ac 1 -b:a 32k "${mp3Path}"`);
+    } catch (e) {
+      console.warn('Audio downsample error:', e.message);
+    }
+    const targetAudio = fs.existsSync(mp3Path) ? mp3Path : audioPath;
+    const stat = fs.statSync(targetAudio);
+    if (stat.size > 20 * 1024 * 1024) {
+      console.warn('Audio is too large for inline Gemini payload (>20MB), falling back to Whisper.');
+      return null;
+    }
+
+    const audioBuffer = fs.readFileSync(targetAudio);
+    const base64Audio = audioBuffer.toString('base64');
+
+    for (let attempt = 0; attempt < Math.min(keys.length, 3); attempt++) {
+      const apiKey = getGeminiKey();
+      try {
+        console.log(`🤖 Gemini Multimodal AI កំពុងស្ដាប់សំឡេងវីដេអូផ្ទាល់ដើម្បីស្រង់អក្សរ និងបែងចែកភេទតួអង្គ...`);
+
+        const prompt = `You are a professional drama dialogue supervisor and casting director.
+LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO.
+1. Transcribe all spoken dialogues with accurate start time and end time in seconds.
+2. CRITICAL SPEAKER GENDER IDENTIFICATION:
+   Listen to each speaker's actual voice frequency, timbre, and vocal characteristics.
+   Classify each segment strictly as "male" (សំឡេងប្រុស) or "female" (សំឡេងស្រី).
+3. Return a STRICT JSON array of objects with the exact structure:
+[
+  {
+    "start": 0.0,
+    "end": 2.5,
+    "gender": "male",
+    "text": "original spoken dialogue"
+  },
+  {
+    "start": 2.5,
+    "end": 4.8,
+    "gender": "female",
+    "text": "original spoken dialogue"
+  }
+]
+Output ONLY valid JSON. No markdown formatting, no commentary.`;
+
+        const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: 'audio/mp3', data: base64Audio } }
+              ]
+            }],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json'
+            }
+          })
+        });
+
+        if (res.status === 429) {
+          console.warn('[Gemini 429] Rotating key...');
+          rotateGeminiKey();
+          continue;
+        }
+
+        if (res.ok) {
+          const data = await res.json();
+          const rawOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (rawOutput) {
+            const cleanJson = rawOutput.replace(/```json/g, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleanJson);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              console.log(`✅ Gemini AI បានស្ដាប់ឮ និងស្រង់បាន ${parsed.length} dialogue segments ជាមួយភេទប្រុសស្រីត្រឹមត្រូវ!`);
+              rotateGeminiKey();
+              try { fs.unlinkSync(mp3Path); } catch (e) {}
+              return {
+                text: parsed.map(s => s.text).join(' '),
+                segments: parsed.map(s => ({
+                  start: Math.max(0, parseFloat(s.start) || 0),
+                  end: Math.max((parseFloat(s.start) || 0) + 0.6, parseFloat(s.end) || ((parseFloat(s.start) || 0) + 2)),
+                  gender: (s.gender && s.gender.toLowerCase().includes('female')) ? 'female' : 'male',
+                  text: (s.text || '').trim()
+                })).filter(s => s.text),
+                language: 'zh'
+              };
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Gemini audio transcribe error:', err.message);
+        rotateGeminiKey();
+      }
+    }
+  } catch (err) {
+    console.warn('transcribeAndDiarizeWithGemini error:', err.message);
+  }
+  return null;
+}
+
+// --- Helper: Transcribe Audio using Gemini Multimodal AI or Whisper AI fallback ---
 async function transcribeAudio(audioPath) {
+  // 1. Priority 1: Gemini Multimodal Audio AI (Listening to real voices & detecting gender + subtitle text)
+  if (getAllGeminiKeys().length > 0) {
+    const geminiAudioResult = await transcribeAndDiarizeWithGemini(audioPath);
+    if (geminiAudioResult && geminiAudioResult.segments && geminiAudioResult.segments.length > 0) {
+      return geminiAudioResult;
+    }
+  }
+
   let whisperError = null;
 
-  // 1. Priority: Local Whisper AI (Free, 100+ languages, sentence timestamps)
+  // 2. Priority 2: Local Whisper AI (Free, 100+ languages, sentence timestamps)
   const pythonBins = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
   const scriptPath = path.join(__dirname, 'transcribe_whisper.py');
 
@@ -531,7 +650,7 @@ async function transcribeAudio(audioPath) {
     }
   }
 
-  // 2. Groq Whisper API (if API key set)
+  // 3. Priority 3: Groq Whisper API (if API key set)
   const groqKey = process.env.GROQ_API_KEY;
   if (groqKey) {
     try {
@@ -558,44 +677,6 @@ async function transcribeAudio(audioPath) {
       }
     } catch (err) {
       console.warn('Groq transcription failed:', err.message);
-    }
-  }
-
-  // 3. Gemini API (if API key set)
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (geminiKey) {
-    try {
-      console.log('Transcribing with Gemini API...');
-      const audioBuffer = fs.readFileSync(audioPath);
-      const base64Audio = audioBuffer.toString('base64');
-
-      const prompt = `Please transcribe this audio accurately. Output the full text.`;
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: 'audio/wav', data: base64Audio } }
-            ]
-          }]
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const geminiText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        return {
-          text: geminiText,
-          segments: [],
-          language: 'auto'
-        };
-      }
-    } catch (err) {
-      console.warn('Gemini transcription failed:', err.message);
     }
   }
 
@@ -930,6 +1011,20 @@ async function getAudioDuration(audioPath) {
   }
 }
 
+// --- Helper: Get Video Dimensions (Width & Height) ---
+async function getVideoDimensions(videoPath) {
+  try {
+    const { stdout } = await runCmd(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${videoPath}"`);
+    const parts = stdout.trim().split('x');
+    if (parts.length === 2) {
+      const width = parseInt(parts[0], 10);
+      const height = parseInt(parts[1], 10);
+      if (!isNaN(width) && !isNaN(height)) return { width, height };
+    }
+  } catch (e) {}
+  return { width: 1280, height: 720 };
+}
+
 // --- Main Pipeline: Process Story Video ---
 async function processStoryVideo({
   bot,
@@ -1117,13 +1212,20 @@ async function processStoryVideo({
       voiceAudioPath = await synthesizeKhmerVoice(fullKhmerText, voiceType, workDir);
     }
 
-    // 5. Duck & Dub with FFmpeg (Mixing clean BGM with Khmer voice)
-    await updateProgress('កំពុង Render វីដេអូបកប្រែរួច (Quality 720p HD)..', 92);
+    // 5. Duck & Dub with FFmpeg (Mixing clean BGM with Khmer voice + 1080p Full HD Resolution)
+    await updateProgress('កំពុង Render វីដេអូបកប្រែរួច (Quality 1080p Full HD)..', 92);
+
+    const dims = await getVideoDimensions(inputVideoPath);
+    const isPortrait = dims.height > dims.width;
+    const scaleFilter = isPortrait ? 'scale=1080:-2:flags=lanczos' : 'scale=-2:1080:flags=lanczos';
+
+    console.log(`Rendering video in 1080p Full HD (${isPortrait ? 'Portrait 1080p' : 'Landscape 1080p'})...`);
+
     if (hasCleanBgm) {
       // 100% Pure BGM: The original foreign dialogue is completely eliminated!
       console.log('Rendering with Clean AI Separated BGM...');
       const filter = `[1:a]volume=0.85[bgm];[2:a]volume=1.25[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
-      await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${cleanBgmPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+      await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${cleanBgmPath}" -i "${voiceAudioPath}" -filter_complex "${filter}" -vf "${scaleFilter}" -map 0:v -map "[aout]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k "${dubbedVideoPath}"`);
     } else {
       // 100% Dialogue Elimination: Center vocal cancellation + Active Speech Segment Muting (-40dB)
       console.log('Rendering with Center Vocal Cut & Active Dialogue Gating...');
@@ -1137,11 +1239,11 @@ async function processStoryVideo({
       // 4. Khmer voice track plays at loud and clear 1.35 volume
       const vocalCutFilter = `[0:a]stereotools=mlev=0.0:slev=1.2,volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
       try {
-        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${vocalCutFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${vocalCutFilter}" -vf "${scaleFilter}" -map 0:v -map "[aout]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k "${dubbedVideoPath}"`);
       } catch (err) {
         console.warn('Vocal cut filter error, falling back to volume gate:', err.message);
         const fallbackFilter = `[0:a]volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
-        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${fallbackFilter}" -map 0:v -map "[aout]" -c:v copy -c:a aac "${dubbedVideoPath}"`);
+        await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${fallbackFilter}" -vf "${scaleFilter}" -map 0:v -map "[aout]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k "${dubbedVideoPath}"`);
       }
     }
 
@@ -1167,7 +1269,7 @@ async function processStoryVideo({
       const partLabel = finalVideoParts.length > 1 ? ` (ភាគទី ${part.partNumber})` : '';
       const stat = fs.statSync(part.path);
       const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
-      const caption = `🎉 បកប្រែរឿងរួចរាល់${partLabel} (Quality 720p HD)! ✨\n🎙️ សម្លេង៖ ${voiceType} | 📺 កម្រិតរូបភាព៖ 720p HD | 📦 ទំហំ៖ ${sizeMb}MB\n⏱️ រយៈពេល៖ ~${Math.round(duration)} វិនាទី\n💎 ផលិតដោយ៖ @AiStudioSSOnline_bot`;
+      const caption = `🎉 បកប្រែរឿងរួចរាល់${partLabel} (Quality 1080p Full HD)! ✨\n🎙️ សម្លេង៖ ${voiceType} | 📺 កម្រិតរូបភាព៖ 1080p Full HD | 📦 ទំហំ៖ ${sizeMb}MB\n⏱️ រយៈពេល៖ ~${Math.round(duration)} វិនាទី\n💎 ផលិតដោយ៖ @AiStudioSSOnline_bot`;
       
       // If on Local Bot API, we can send up to 2GB video with streaming; otherwise standard Telegram 50MB limit applies
       const isLocalApi = process.env.BOT_API_ROOT || (process.env.LOCAL_BOT_API === 'true');
