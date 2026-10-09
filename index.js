@@ -467,7 +467,7 @@ bot.hears('🔄 URL To QR', (ctx) => ctx.reply('សូមផ្ញើ Link (URL)
 bot.hears('📜 Image To PDF', (ctx) => ctx.reply('សូមផ្ញើរូបភាពមក ខ្ញុំនឹងបម្លែងវាទៅជាឯកសារ PDF 📑'));
 
 // --- 1. 💻 បកប្រែរឿង (Story Translation Dashboard & Config) ---
-bot.hears('💻 បកប្រែរឿង', (ctx) => {
+bot.hears(['💻 បកប្រែរឿង', /បកប្រែរឿង/], (ctx) => {
   const { text, inlineKeyboard } = getStoryTranslateDashboard(ctx.from.id);
   ctx.reply(text, inlineKeyboard);
 });
@@ -819,7 +819,52 @@ bot.on('video', async (ctx) => {
     });
     return;
   }
-  ctx.reply(`🎬 បានទទួលវីដេអូ (រយៈពេល ${video.duration} វិនាទី)`);
+  // Direct video upload fallback: Offer instant dubbing options!
+  state.pendingVideoFileId = video.file_id;
+  state.pendingVideoDuration = video.duration;
+  return ctx.reply(`🎬 បានទទួលវីដេអូរបស់អ្នក! (ទំហំ: ${(video.file_size / (1024*1024)).toFixed(1)} MB, រយៈពេល: ${video.duration}s)\n\n👉 សូមជ្រើសរើសសំឡេងដើម្បីចាប់ផ្តើមបកប្រែ និងបញ្ចូលសំឡេងខ្មែរភ្លាមៗ៖`, Markup.inlineKeyboard([
+    [Markup.button.callback('💬 ១. សំឡេងប្រុស (Standard)', 'quick_dub_male')],
+    [Markup.button.callback('💬 ២. សំឡេងស្រី (Standard)', 'quick_dub_female')],
+    [Markup.button.callback('🤖 ៣. សំឡេងប្រុស & ស្រី (Auto Both)', 'quick_dub_both')],
+    [Markup.button.callback('❌ បោះបង់', 'story_back_to_menu')]
+  ]));
+});
+
+// Quick Dub Action Handlers
+bot.action(['quick_dub_male', 'quick_dub_female', 'quick_dub_both'], async (ctx) => {
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+  const fileId = state.pendingVideoFileId;
+  if (!fileId) {
+    return ctx.reply('⚠️ វីដេអូនេះផុតកំណត់ហើយ សូមផ្ញើវីដេអូម្តងទៀត!');
+  }
+
+  if (ctx.match[0] === 'quick_dub_male') state.storyVoice = 'សំឡេងប្រុស';
+  else if (ctx.match[0] === 'quick_dub_female') state.storyVoice = 'សំឡេងស្រី';
+  else if (ctx.match[0] === 'quick_dub_both') state.storyVoice = 'សំឡេងប្រុស & ស្រី';
+
+  const userData = await getUserInfo(userId);
+  const userCredits = userData.credits || 0;
+  if (userCredits < 1000) {
+    return ctx.reply(`⚠️ Credit របស់អ្នកមិនគ្រប់គ្រាន់ទេ! តម្រូវការ 1000 Credits (សមតុល្យបច្ចុប្បន្ន: ${userCredits} Cr)`);
+  }
+  await deductCredits(userId, 1000);
+  await ctx.deleteMessage().catch(() => {});
+
+  const splitMins = getSplitMinutes(state.storySplitIndex);
+  const progressMsg = await ctx.reply(`🎬 ចាប់ផ្តើមដំណើរការបកប្រែវីដេអូ!\n🎙️ សំឡេង: ${state.storyVoice}\n🎞️ កាត់ភាគ: ${splitOptions[state.storySplitIndex]}\n💰 បានកាត់ 1000 Credits\n\n⏳ កំពុងដំណើរការ...`);
+
+  processStoryVideo({
+    bot,
+    ctx,
+    fileId,
+    voiceType: state.storyVoice,
+    splitMinutes: splitMins,
+    statusMsgId: progressMsg.message_id
+  }).catch(err => {
+    console.error('Quick dub process error:', err);
+    ctx.reply(`❌ មានបញ្ហាក្នុងដំណើរការបកប្រែវីដេអូ៖ ${err.message}`);
+  });
 });
 
 // Voice / Audio Handler (for Voice Cloning)
