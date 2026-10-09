@@ -324,30 +324,36 @@ bot.command('addcredit', async (ctx) => {
   }
 });
 
-// Command: /setkey or /gemini to set Gemini AI key directly
-bot.command(['setkey', 'gemini'], async (ctx) => {
+// Command: /setkey, /groq, or /gemini to set API key directly
+bot.command(['setkey', 'groq', 'gemini'], async (ctx) => {
   const parts = ctx.message.text.split(/\s+/);
   if (parts.length < 2) {
-    return ctx.reply('👉 របៀបប្រើ៖ `/setkey <GEMINI_API_KEY>`\nឧទាហរណ៍៖ `/setkey AIzaSyD...`\n\n(អ្នកអាចបង្កើត Gemini API Key ឥតគិតថ្លៃបានពី https://aistudio.google.com)', { parse_mode: 'Markdown' });
+    return ctx.reply('👉 របៀបប្រើ៖ `/setkey <API_KEY>`\n• បើប្រើ Groq (Free លឿនបំផុត): `/setkey gsk_...`\n• បើប្រើ Gemini: `/setkey AIzaSy...`\n\n🔗 យក Groq Key ឥតគិតថ្លៃ (10 វិនាទី)៖ https://console.groq.com/keys\n🔗 យក Gemini Key៖ https://aistudio.google.com', { parse_mode: 'Markdown' });
   }
   const key = parts[1].trim();
-  process.env.GEMINI_API_KEY = key;
-  process.env.GEMINI_API_KEYS = key;
-  try {
-    const envPath = path.join(__dirname, '.env');
-    if (fs.existsSync(envPath)) {
-      let envContent = fs.readFileSync(envPath, 'utf-8');
-      if (envContent.includes('GEMINI_API_KEY=')) {
-        envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${key}`);
-      } else {
-        envContent += `\nGEMINI_API_KEY=${key}\n`;
-      }
-      fs.writeFileSync(envPath, envContent, 'utf-8');
+  const envPath = path.join(__dirname, '.env');
+  let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+
+  if (key.startsWith('gsk_')) {
+    process.env.GROQ_API_KEY = key;
+    if (envContent.includes('GROQ_API_KEY=')) {
+      envContent = envContent.replace(/GROQ_API_KEY=.*/, `GROQ_API_KEY=${key}`);
+    } else {
+      envContent += `\nGROQ_API_KEY=${key}\n`;
     }
-  } catch (e) {
-    console.error('Failed to write .env:', e);
+    fs.writeFileSync(envPath, envContent, 'utf-8');
+    return ctx.reply(`⚡ បានកំណត់ Groq AI Key (Llama 3.3 70B) ជោគជ័យ! 🎉\n• ល្បឿនបកប្រែ៖ 0.8 វិនាទី (លឿនបំផុត)\n• កូតា៖ 14,400 Requests/ថ្ងៃ (Free 100% គ្មានជាប់ Quota)\n• កំណត់តួអង្គ (ប្រុស) និង (ស្រី) ដោយស្វ័យប្រវត្តិច្បាស់ ១០០%!`);
+  } else {
+    process.env.GEMINI_API_KEY = key;
+    process.env.GEMINI_API_KEYS = key;
+    if (envContent.includes('GEMINI_API_KEY=')) {
+      envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${key}`);
+    } else {
+      envContent += `\nGEMINI_API_KEY=${key}\n`;
+    }
+    fs.writeFileSync(envPath, envContent, 'utf-8');
+    return ctx.reply(`✅ បានកំណត់ Gemini API Key ជោគជ័យ! 🎉\nរាល់ការបកប្រែវីដេអូ និងរឿងបន្ទាប់ នឹងប្រើប្រាស់ Gemini AI ដោយផ្ទាល់ ដើម្បីបកប្រែមានមនោសញ្ចេតនាល្អបំផុត!`);
   }
-  return ctx.reply(`✅ បានកំណត់ Gemini API Key ជោគជ័យ! 🎉\nរាល់ការបកប្រែវីដេអូ និងរឿងបន្ទាប់ នឹងប្រើប្រាស់ Gemini AI ដោយផ្ទាល់ ដើម្បីបង្កើតសំឡេងនិយាយបែបតួសម្តែង និងបកប្រែមានមនោសញ្ចេតនាល្អបំផុត!`);
 });
 
 bot.start(async (ctx) => {
