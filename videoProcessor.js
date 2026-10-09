@@ -193,7 +193,10 @@ ${numberedText}`;
         const khmer = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (khmer) {
           const parsed = parseNumberedOutput(khmer, lines.length);
-          if (parsed && parsed.some(Boolean)) return parsed;
+          if (parsed && parsed.some(Boolean)) {
+            rotateGeminiKey(); // Round-robin to next key in pool
+            return parsed;
+          }
         }
       }
     } catch (err) {
@@ -252,7 +255,10 @@ ${numberedText}`;
         const khmer = data.choices?.[0]?.message?.content;
         if (khmer) {
           const parsed = parseNumberedOutput(khmer, lines.length);
-          if (parsed && parsed.some(Boolean)) return parsed;
+          if (parsed && parsed.some(Boolean)) {
+            rotateGroqKey(); // Round-robin to next key in pool
+            return parsed;
+          }
         }
       }
     } catch (err) {
