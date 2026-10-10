@@ -354,7 +354,8 @@ ${numberedText}`;
         body: JSON.stringify({
           model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3
+          temperature: 0.3,
+          max_tokens: 800
         }),
         signal: AbortSignal.timeout(20000)
       });
@@ -487,7 +488,8 @@ async function translateWithGroq(text) {
       body: JSON.stringify({
         model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
+        temperature: 0.3,
+        max_tokens: 300
       }),
       signal: AbortSignal.timeout(15000)
     });

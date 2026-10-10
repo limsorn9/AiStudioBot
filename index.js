@@ -686,7 +686,7 @@ async function checkAiModelsHealth() {
 
       const activeModel = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
       results.groq.activeModel = activeModel;
-      const genRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      let genRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${groqKey}`,
@@ -694,10 +694,31 @@ async function checkAiModelsHealth() {
         },
         body: JSON.stringify({
           model: activeModel,
-          messages: [{ role: 'user', content: 'Say OK' }]
+          messages: [{ role: 'user', content: 'Say OK' }],
+          max_tokens: 150
         }),
         signal: AbortSignal.timeout(10000)
       });
+      if (!genRes.ok) {
+        // Fallback to openai/gpt-oss-120b
+        const fallbackRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${groqKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'openai/gpt-oss-120b',
+            messages: [{ role: 'user', content: 'Say OK' }],
+            max_tokens: 150
+          }),
+          signal: AbortSignal.timeout(10000)
+        });
+        if (fallbackRes.ok) {
+          genRes = fallbackRes;
+          results.groq.activeModel = `${activeModel} (Fallback: openai/gpt-oss-120b)`;
+        }
+      }
       results.groq.latencyMs = Date.now() - t0;
       if (genRes.ok) {
         results.groq.ok = true;
