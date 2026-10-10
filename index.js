@@ -199,12 +199,36 @@ async function addApiKeyToFirebase(provider = 'groq', newKey, userId = null) {
   return addApiKeysToFirebase(provider, newKey, userId);
 }
 
-// 4. Clear keys for a specific user
+// 4. Clear keys for a specific user (Permanently removed ONLY when user explicitly clicks Delete)
 async function clearUserApiKeysFromFirebase(userId, provider = 'groq') {
-  if (rtdb && userId) {
-    try {
-      await rtdb.ref(`users/${userId}/api_keys/${provider}`).remove();
-    } catch (e) {}
+  if (!rtdb || !userId) return true;
+  try {
+    // 1. Get user's current keys to track what to remove
+    const userKeys = await getUserStoredApiKeys(userId, provider);
+
+    // 2. Permanently remove from user profile
+    await rtdb.ref(`users/${userId}/api_keys/${provider}`).remove();
+
+    // 3. Remove this user's keys from Admin Master Pool
+    for (const key of userKeys) {
+      const safeKeyId = Buffer.from(key).toString('hex').slice(0, 32);
+      await rtdb.ref(`admin_master_keys/${provider}/${safeKeyId}`).remove();
+    }
+
+    // 4. Refresh global pool in Firebase and in memory
+    const allPooled = await getAllPooledApiKeys(provider);
+    await rtdb.ref(`api_keys/${provider}`).set(allPooled);
+
+    if (provider === 'groq') {
+      process.env.GROQ_API_KEYS = allPooled.join(',');
+      process.env.GROQ_API_KEY = allPooled[0] || '';
+    } else {
+      process.env.GEMINI_API_KEYS = allPooled.join(',');
+      process.env.GEMINI_API_KEY = allPooled[0] || '';
+    }
+    console.log(`🗑️ User ${userId} បានលុប ${userKeys.length} ${provider} keys ចេញពី Firebase`);
+  } catch (e) {
+    console.error('clearUserApiKeysFromFirebase error:', e.message);
   }
   return true;
 }
