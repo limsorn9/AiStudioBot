@@ -352,10 +352,11 @@ ${numberedText}`;
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.3
-        })
+        }),
+        signal: AbortSignal.timeout(20000)
       });
 
       if (res.status === 429) {
@@ -473,7 +474,7 @@ async function translateWithGemini(text) {
 
 // 5. Single-Text Groq Fallback
 async function translateWithGroq(text) {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = getGroqKey() || (getAllGroqKeys()[0]) || process.env.GROQ_API_KEY;
   if (!apiKey) return null;
   try {
     const prompt = `Translate the following dialogue into expressive, emotive spoken Khmer with dramatic feeling for movie dubbing (ប្រើពាក្យសន្ទនា ណា, ហ្នឹង, អ្ហា...). Output ONLY the Khmer text:\n\n${text}`;
@@ -484,10 +485,11 @@ async function translateWithGroq(text) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3
-      })
+      }),
+      signal: AbortSignal.timeout(15000)
     });
     if (res.ok) {
       const data = await res.json();
@@ -669,7 +671,8 @@ Output ONLY valid JSON. No markdown formatting, no commentary.`;
               temperature: 0.1,
               responseMimeType: 'application/json'
             }
-          })
+          }),
+          signal: AbortSignal.timeout(45000)
         });
 
         if (res.status === 429) {
@@ -722,7 +725,8 @@ async function transcribeSingleChunkWithGroq(chunkAudioPath, chunkStartSec = 0) 
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${groqKey}` },
-      body: formData
+      body: formData,
+      signal: AbortSignal.timeout(30000)
     });
 
     if (res.ok) {
@@ -867,7 +871,7 @@ async function transcribeAudio(audioPath, onProgress) {
   }
 
   // 3. Priority 3: Groq Whisper API (if API key set)
-  const groqKey = process.env.GROQ_API_KEY;
+  const groqKey = getGroqKey() || (getAllGroqKeys()[0]) || process.env.GROQ_API_KEY;
   if (groqKey) {
     try {
       console.log('Transcribing with Groq Whisper API...');
@@ -880,7 +884,8 @@ async function transcribeAudio(audioPath, onProgress) {
       const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${groqKey}` },
-        body: formData
+        body: formData,
+        signal: AbortSignal.timeout(35000)
       });
 
       if (res.ok) {
