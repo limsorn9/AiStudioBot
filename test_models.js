@@ -10,46 +10,55 @@ async function getAllKeys(provider = 'groq') {
   envRaw.split(',').map(k => k.trim()).filter(Boolean).forEach(k => allKeys.add(k));
 
   try {
-    const credPath = path.resolve(__dirname, process.env.GOOGLE_APPLICATION_CREDENTIALS || 'serviceAccountKey.json');
-    if (fs.existsSync(credPath)) {
-      const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'));
-      if (getApps().length === 0) {
-        initializeApp({
-          credential: cert(cred),
-          databaseURL: process.env.FIREBASE_DB_URL
-        });
-      }
-      const db = getDatabase();
+    let serviceAccount = null;
+    const keyFile = path.join(__dirname, 'firebase-key.json');
+    const credEnv = (process.env.FIREBASE_CREDENTIALS || '').trim();
 
-      // A. Legacy global pool
-      const gSnap = await db.ref(`api_keys/${provider}`).once('value');
-      if (gSnap.exists()) {
-        const val = gSnap.val();
-        const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
-        list.filter(Boolean).forEach(k => allKeys.add(k));
-      }
+    if (fs.existsSync(keyFile)) {
+      serviceAccount = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
+    } else if (credEnv.startsWith('{')) {
+      serviceAccount = JSON.parse(credEnv);
+    } else if (credEnv && fs.existsSync(credEnv)) {
+      serviceAccount = JSON.parse(fs.readFileSync(credEnv, 'utf8'));
+    }
 
-      // B. Admin master keys
-      const mSnap = await db.ref(`admin_master_keys/${provider}`).once('value');
-      if (mSnap.exists()) {
-        const val = mSnap.val();
-        const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
-        list.filter(Boolean).forEach(item => {
-          const k = typeof item === 'object' ? item.key : item;
-          if (k) allKeys.add(k);
-        });
-      }
+    if (serviceAccount && getApps().length === 0) {
+      initializeApp({
+        credential: cert(serviceAccount),
+        databaseURL: process.env.FIREBASE_DB_URL
+      });
+    }
 
-      // C. Users pool
-      const uSnap = await db.ref('users').once('value');
-      if (uSnap.exists()) {
-        const users = uSnap.val();
-        for (const uid of Object.keys(users)) {
-          const uKeys = users[uid]?.api_keys?.[provider];
-          if (uKeys) {
-            const list = Array.isArray(uKeys) ? uKeys : Object.values(uKeys);
-            list.filter(Boolean).forEach(k => allKeys.add(k));
-          }
+    const db = getDatabase();
+
+    // A. Legacy global pool
+    const gSnap = await db.ref(`api_keys/${provider}`).once('value');
+    if (gSnap.exists()) {
+      const val = gSnap.val();
+      const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
+      list.filter(Boolean).forEach(k => allKeys.add(k));
+    }
+
+    // B. Admin master keys
+    const mSnap = await db.ref(`admin_master_keys/${provider}`).once('value');
+    if (mSnap.exists()) {
+      const val = mSnap.val();
+      const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
+      list.filter(Boolean).forEach(item => {
+        const k = typeof item === 'object' ? item.key : item;
+        if (k) allKeys.add(k);
+      });
+    }
+
+    // C. Users pool
+    const uSnap = await db.ref('users').once('value');
+    if (uSnap.exists()) {
+      const users = uSnap.val();
+      for (const uid of Object.keys(users)) {
+        const uKeys = users[uid]?.api_keys?.[provider];
+        if (uKeys) {
+          const list = Array.isArray(uKeys) ? uKeys : Object.values(uKeys);
+          list.filter(Boolean).forEach(k => allKeys.add(k));
         }
       }
     }
