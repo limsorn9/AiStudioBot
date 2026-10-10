@@ -654,26 +654,50 @@ LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO TRACK.
 ]
 Output ONLY valid JSON. No markdown formatting, no commentary.`;
 
-        const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: 'audio/mp3', data: base64Audio } }
-              ]
-            }],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: 'application/json'
-            }
-          }),
-          signal: AbortSignal.timeout(45000)
-        });
+        const preferredModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        let res = null;
+        try {
+          res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${preferredModel}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: prompt },
+                  { inlineData: { mimeType: 'audio/mp3', data: base64Audio } }
+                ]
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                responseMimeType: 'application/json'
+              }
+            }),
+            signal: AbortSignal.timeout(18000)
+          });
+        } catch (mErr) {
+          if (preferredModel !== 'gemini-3.5-flash') {
+            console.warn(`[Gemini] ${preferredModel} slow/timeout (${mErr.message}), falling back to gemini-3.5-flash...`);
+            res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: 'audio/mp3', data: base64Audio } }
+                  ]
+                }],
+                generationConfig: {
+                  temperature: 0.1,
+                  responseMimeType: 'application/json'
+                }
+              }),
+              signal: AbortSignal.timeout(25000)
+            });
+          } else {
+            throw mErr;
+          }
+        }
 
         if (res.status === 429) {
           console.warn('[Gemini 429] Rotating key...');

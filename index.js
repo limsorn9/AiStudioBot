@@ -728,22 +728,36 @@ async function checkAiModelsHealth() {
           .map(m => m.name.replace('models/', ''));
       }
 
-      const activeModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+      const activeModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
       results.gemini.activeModel = activeModel;
-      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${geminiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'Hello, respond with OK' }] }]
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
+      let genRes = null;
+      try {
+        genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${geminiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'Hello, respond with OK' }] }]
+          }),
+          signal: AbortSignal.timeout(10000)
+        });
+      } catch (err) {
+        // Auto-fallback to gemini-3.5-flash
+        genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${geminiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'Hello, respond with OK' }] }]
+          }),
+          signal: AbortSignal.timeout(10000)
+        });
+        results.gemini.activeModel = `${activeModel} (Fallback: gemini-3.5-flash)`;
+      }
       results.gemini.latencyMs = Date.now() - t0;
-      if (genRes.ok) {
+      if (genRes && genRes.ok) {
         results.gemini.ok = true;
       } else {
-        const errText = await genRes.text().catch(() => '');
-        results.gemini.error = `HTTP ${genRes.status}: ${errText.slice(0, 120)}`;
+        const errText = genRes ? await genRes.text().catch(() => '') : '';
+        results.gemini.error = `HTTP ${genRes?.status}: ${errText.slice(0, 120)}`;
       }
     } catch (e) {
       results.gemini.error = e.message;
