@@ -69,45 +69,59 @@ async function getAllKeys(provider = 'groq') {
   return Array.from(allKeys);
 }
 
-async function runTest() {
-  console.log('🔍 កំពុងតេស្ត និងទាញយកបញ្ជី AI Models ពី Google Gemini & Groq...\n');
+async function runBenchmark() {
+  console.log('🚀 BENCHMARKING LATEST AI GENERATIONS ON VPS:\n');
 
   const groqKeys = await getAllKeys('groq');
   const geminiKeys = await getAllKeys('gemini');
 
-  // Test Groq
-  if (groqKeys.length > 0) {
+  // Benchmark Groq Models
+  console.log('⚡ [GROQ LLM Translation Benchmarks]');
+  const groqCandidates = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
+  for (const model of groqCandidates) {
+    const t0 = Date.now();
     try {
-      const res = await fetch('https://api.groq.com/openai/v1/models', {
-        headers: { 'Authorization': `Bearer ${groqKeys[0]}` }
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${groqKeys[0]}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'Translate to natural spoken Khmer: "Wait for me, I will never give up!"' }]
+        }),
+        signal: AbortSignal.timeout(10000)
       });
       const data = await res.json();
-      const models = (data.data || []).map(m => m.id);
-      console.log(`⚡ [GROQ API] (រកឃើញ ${groqKeys.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
-      models.forEach(m => console.log('  • ' + m));
+      const text = data.choices?.[0]?.message?.content?.trim();
+      console.log(`  • ${model}: ${res.status === 200 ? '✅ 200 OK' : '❌ ' + res.status} (${Date.now() - t0}ms) -> "${text?.slice(0, 50)}"`);
     } catch (e) {
-      console.error('Groq test error:', e.message);
+      console.log(`  • ${model}: ❌ Error: ${e.message}`);
     }
-  } else {
-    console.log('⚡ [GROQ] គ្មាន Key ក្នុងប្រព័ន្ធ');
   }
 
-  console.log('\n--------------------------------------------------\n');
-
-  // Test Gemini
-  if (geminiKeys.length > 0) {
+  console.log('\n🤖 [GEMINI Audio & Vision LLM Benchmarks]');
+  const geminiCandidates = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.5-transcribe', 'gemini-flash-latest'];
+  for (const model of geminiCandidates) {
+    const t0 = Date.now();
     try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKeys[0]}`);
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKeys[0]}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Translate to natural spoken Khmer: "Wait for me, I will never give up!"' }] }]
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
       const data = await res.json();
-      const models = (data.models || []).map(m => m.name.replace('models/', ''));
-      console.log(`🤖 [GEMINI API] (រកឃើញ ${geminiKeys.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
-      models.forEach(m => console.log('  • ' + m));
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      const err = data.error ? data.error.message?.slice(0, 70) : null;
+      console.log(`  • ${model}: ${res.status === 200 ? '✅ 200 OK' : '❌ ' + res.status} (${Date.now() - t0}ms) -> ${text ? '"' + text.slice(0, 50) + '"' : 'ERR: ' + err}`);
     } catch (e) {
-      console.error('Gemini test error:', e.message);
+      console.log(`  • ${model}: ❌ Error: ${e.message}`);
     }
-  } else {
-    console.log('🤖 [GEMINI] គ្មាន Key ក្នុងប្រព័ន្ធ');
   }
 }
 
-runTest();
+runBenchmark();
