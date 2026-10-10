@@ -223,7 +223,7 @@ Each input line ALREADY includes the speaker gender identified from actual audio
 
 ${numberedText}`;
 
-      const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+      const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: 'POST',
@@ -386,7 +386,7 @@ async function translateWithGemini(text) {
     const apiKey = getGeminiKey();
     try {
       const prompt = `You are a professional Khmer movie voice actor. Translate the following dialogue into expressive, emotive spoken Khmer with natural emotion, feeling, and conversational particles (ណា, ហ្នឹង, អ្ហា, ឯង...). Output ONLY the translated Khmer text:\n\n${text}`;
-      const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+      const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: 'POST',
@@ -615,7 +615,7 @@ LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO TRACK.
 ]
 Output ONLY valid JSON. No markdown formatting, no commentary.`;
 
-        const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+        const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
         const res = await fetch(url, {
@@ -625,7 +625,7 @@ Output ONLY valid JSON. No markdown formatting, no commentary.`;
             contents: [{
               parts: [
                 { text: prompt },
-                { inline_data: { mime_type: 'audio/mp3', data: base64Audio } }
+                { inlineData: { mimeType: 'audio/mp3', data: base64Audio } }
               ]
             }],
             generationConfig: {
@@ -1310,7 +1310,7 @@ async function processStoryVideo({
       // 2. volume drops to 0.01 (-40dB) whenever original dialogue is present
       // 3. volume restores to 0.85 during scene pauses, action, and BGM
       // 4. Khmer voice track plays at loud and clear 1.35 volume
-      const vocalCutFilter = `[0:a]stereotools=mlev=0.0:slev=1.2,volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
+      const vocalCutFilter = `[0:a]stereotools=mlev=0.015625:slev=1.2,volume=enable='${muteExpr}':volume=0.01:eval=frame,volume=0.85[bgm];[1:a]volume=1.35[vox];[bgm][vox]amix=inputs=2:duration=first[aout]`;
       try {
         await runCmd(`ffmpeg -y -i "${inputVideoPath}" -i "${voiceAudioPath}" -filter_complex "${vocalCutFilter}" -vf "${scaleFilter}" -map 0:v -map "[aout]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k "${dubbedVideoPath}"`);
       } catch (err) {

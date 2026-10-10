@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const { initializeApp, cert, getApps } = require('firebase-admin/app');

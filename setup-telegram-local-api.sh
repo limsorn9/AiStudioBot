@@ -54,6 +54,8 @@ fi
 
 ENV_FILE="$APP_DIR/.env"
 if [ -f "$ENV_FILE" ]; then
+    # Ensure file ends with newline
+    [ -n "$(tail -c1 "$ENV_FILE" 2>/dev/null)" ] && echo "" >> "$ENV_FILE"
     grep -q "BOT_API_ROOT" "$ENV_FILE" || echo "BOT_API_ROOT=http://127.0.0.1:8081" >> "$ENV_FILE"
     grep -q "LOCAL_BOT_API" "$ENV_FILE" || echo "LOCAL_BOT_API=true" >> "$ENV_FILE"
     echo "✅ បានបន្ថែម BOT_API_ROOT=http://127.0.0.1:8081 ទៅក្នុង $ENV_FILE រួចរាល់!"
