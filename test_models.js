@@ -4,9 +4,10 @@ const path = require('path');
 const { initializeApp, cert, getApps } = require('firebase-admin/app');
 const { getDatabase } = require('firebase-admin/database');
 
-async function getKeysFromFirebase() {
-  let groqKeys = [];
-  let geminiKeys = [];
+async function getAllKeys(provider = 'groq') {
+  const allKeys = new Set();
+  const envRaw = provider === 'groq' ? (process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '') : (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '');
+  envRaw.split(',').map(k => k.trim()).filter(Boolean).forEach(k => allKeys.add(k));
 
   try {
     const credPath = path.resolve(__dirname, process.env.GOOGLE_APPLICATION_CREDENTIALS || 'serviceAccountKey.json');
@@ -19,49 +20,61 @@ async function getKeysFromFirebase() {
         });
       }
       const db = getDatabase();
-      const usersSnap = await db.ref('users').once('value');
-      if (usersSnap.exists()) {
-        const users = usersSnap.val();
+
+      // A. Legacy global pool
+      const gSnap = await db.ref(`api_keys/${provider}`).once('value');
+      if (gSnap.exists()) {
+        const val = gSnap.val();
+        const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
+        list.filter(Boolean).forEach(k => allKeys.add(k));
+      }
+
+      // B. Admin master keys
+      const mSnap = await db.ref(`admin_master_keys/${provider}`).once('value');
+      if (mSnap.exists()) {
+        const val = mSnap.val();
+        const list = Array.isArray(val) ? val : (typeof val === 'object' ? Object.values(val) : []);
+        list.filter(Boolean).forEach(item => {
+          const k = typeof item === 'object' ? item.key : item;
+          if (k) allKeys.add(k);
+        });
+      }
+
+      // C. Users pool
+      const uSnap = await db.ref('users').once('value');
+      if (uSnap.exists()) {
+        const users = uSnap.val();
         for (const uid of Object.keys(users)) {
-          const uGroq = users[uid]?.api_keys?.groq;
-          const uGem = users[uid]?.api_keys?.gemini;
-          if (uGroq) {
-            const list = Array.isArray(uGroq) ? uGroq : Object.values(uGroq);
-            list.filter(Boolean).forEach(k => groqKeys.push(k));
-          }
-          if (uGem) {
-            const list = Array.isArray(uGem) ? uGem : Object.values(uGem);
-            list.filter(Boolean).forEach(k => geminiKeys.push(k));
+          const uKeys = users[uid]?.api_keys?.[provider];
+          if (uKeys) {
+            const list = Array.isArray(uKeys) ? uKeys : Object.values(uKeys);
+            list.filter(Boolean).forEach(k => allKeys.add(k));
           }
         }
       }
     }
   } catch (e) {
-    // ignore
+    console.error('Firebase read error:', e.message);
   }
 
-  return {
-    groq: [...new Set(groqKeys)],
-    gemini: [...new Set(geminiKeys)]
-  };
+  return Array.from(allKeys);
 }
 
 async function runTest() {
   console.log('🔍 កំពុងតេស្ត និងទាញយកបញ្ជី AI Models ពី Google Gemini & Groq...\n');
 
-  const fbKeys = await getKeysFromFirebase();
-  const groqKey = fbKeys.groq[0] || (process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '').split(',')[0]?.trim();
-  const geminiKey = fbKeys.gemini[0] || (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '').split(',')[0]?.trim();
+  const groqKeys = await getAllKeys('groq');
+  const geminiKeys = await getAllKeys('gemini');
 
   // Test Groq
-  if (groqKey) {
+  if (groqKeys.length > 0) {
     try {
       const res = await fetch('https://api.groq.com/openai/v1/models', {
-        headers: { 'Authorization': `Bearer ${groqKey}` }
+        headers: { 'Authorization': `Bearer ${groqKeys[0]}` }
       });
       const data = await res.json();
       const models = (data.data || []).map(m => m.id);
-      console.log(`⚡ [GROQ API] (រកឃើញ ${fbKeys.groq.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
+      console.log(`⚡ [GROQ API] (រកឃើញ ${groqKeys.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
       models.forEach(m => console.log('  • ' + m));
     } catch (e) {
       console.error('Groq test error:', e.message);
@@ -73,13 +86,13 @@ async function runTest() {
   console.log('\n--------------------------------------------------\n');
 
   // Test Gemini
-  if (geminiKey) {
+  if (geminiKeys.length > 0) {
     try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKeys[0]}`);
       const data = await res.json();
       const models = (data.models || []).map(m => m.name.replace('models/', ''));
-      console.log(`🤖 [GEMINI API] (រកឃើញ ${fbKeys.gemini.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
-      models.filter(m => m.includes('flash') || m.includes('pro')).forEach(m => console.log('  • ' + m));
+      console.log(`🤖 [GEMINI API] (រកឃើញ ${geminiKeys.length} Keys) ម៉ូឌែលដែលកំពុងបើក៖`);
+      models.forEach(m => console.log('  • ' + m));
     } catch (e) {
       console.error('Gemini test error:', e.message);
     }
