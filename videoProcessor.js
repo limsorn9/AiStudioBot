@@ -654,7 +654,7 @@ LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO TRACK.
 ]
 Output ONLY valid JSON. No markdown formatting, no commentary.`;
 
-        const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
         const res = await fetch(url, {

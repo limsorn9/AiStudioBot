@@ -704,7 +704,7 @@ async function checkAiModelsHealth() {
           .map(m => m.name.replace('models/', ''));
       }
 
-      const activeModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+      const activeModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
       results.gemini.activeModel = activeModel;
       const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${geminiKey}`, {
         method: 'POST',
