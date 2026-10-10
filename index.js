@@ -119,60 +119,84 @@ async function getStoredApiKeys(provider = 'groq') {
   return getAllPooledApiKeys(provider);
 }
 
-// 3. Add API key: saves to user's personal keys AND pools into admin master pool
-async function addApiKeyToFirebase(provider = 'groq', newKey, userId = null) {
-  if (!newKey) return { success: false, reason: 'empty' };
-  newKey = newKey.trim();
+// 3. Add API key(s): supports batch keys, unlimited keys per user & master pool
+async function addApiKeysToFirebase(provider = 'groq', keysInput, userId = null) {
+  if (!keysInput) return { success: false, added: 0, reason: 'empty' };
 
-  let userCount = 0;
-  if (userId) {
-    const userKeys = await getUserStoredApiKeys(userId, provider);
-    if (userKeys.includes(newKey)) {
-      return { success: false, reason: 'duplicate', count: userKeys.length };
-    }
-    if (userKeys.length >= 10) {
-      return { success: false, reason: 'limit_reached', count: userKeys.length };
-    }
-    userKeys.push(newKey);
-    userCount = userKeys.length;
-    if (rtdb) {
-      try {
-        await rtdb.ref(`users/${userId}/api_keys/${provider}`).set(userKeys);
-      } catch (e) {
-        console.error('Failed to save to user profile:', e);
+  let rawList = [];
+  if (Array.isArray(keysInput)) {
+    rawList = keysInput;
+  } else if (typeof keysInput === 'string') {
+    rawList = keysInput.split(/[\r\n,;\s]+/).map(k => k.trim()).filter(Boolean);
+  }
+
+  // Filter keys with sensible minimum length (Groq or Gemini keys are typically 25-60 chars)
+  const validKeys = rawList.filter(k => k.length >= 15);
+  if (validKeys.length === 0) return { success: false, added: 0, reason: 'empty' };
+
+  let addedCount = 0;
+  let userKeys = userId ? await getUserStoredApiKeys(userId, provider) : [];
+  const userKeySet = new Set(userKeys);
+
+  for (const key of validKeys) {
+    if (!userKeySet.has(key)) {
+      userKeySet.add(key);
+      addedCount++;
+
+      // Register into Admin Master Pool in Firebase
+      if (rtdb) {
+        try {
+          const safeKeyId = Buffer.from(key).toString('hex').slice(0, 32);
+          await rtdb.ref(`admin_master_keys/${provider}/${safeKeyId}`).set({
+            key: key,
+            addedBy: userId || 'anonymous',
+            addedAt: Date.now()
+          });
+        } catch (e) {
+          console.error('Failed to save to master pool:', e.message);
+        }
       }
     }
   }
 
-  // Register into Admin Master Pool
-  if (rtdb) {
+  userKeys = Array.from(userKeySet);
+
+  if (userId && rtdb) {
     try {
-      const safeKeyId = Buffer.from(newKey).toString('hex').slice(0, 32);
-      await rtdb.ref(`admin_master_keys/${provider}/${safeKeyId}`).set({
-        key: newKey,
-        addedBy: userId || 'anonymous',
-        addedAt: Date.now()
-      });
-      // Also update legacy global
-      const globalKeys = await getAllPooledApiKeys(provider);
-      if (!globalKeys.includes(newKey)) globalKeys.push(newKey);
-      await rtdb.ref(`api_keys/${provider}`).set(globalKeys);
+      await rtdb.ref(`users/${userId}/api_keys/${provider}`).set(userKeys);
     } catch (e) {
-      console.error('Failed to save to master pool:', e);
+      console.error('Failed to save to user profile:', e.message);
     }
   }
 
-  // Refresh process.env keys for active rotation in videoProcessor
+  // Refresh legacy global and process.env
   const allPooled = await getAllPooledApiKeys(provider);
-  if (provider === 'groq') {
-    process.env.GROQ_API_KEYS = allPooled.join(',');
-    process.env.GROQ_API_KEY = allPooled[0];
-  } else {
-    process.env.GEMINI_API_KEYS = allPooled.join(',');
-    process.env.GEMINI_API_KEY = allPooled[0];
+  if (rtdb) {
+    try {
+      await rtdb.ref(`api_keys/${provider}`).set(allPooled);
+    } catch (e) {}
   }
 
-  return { success: true, count: userCount || allPooled.length, totalPooled: allPooled.length };
+  if (provider === 'groq') {
+    process.env.GROQ_API_KEYS = allPooled.join(',');
+    process.env.GROQ_API_KEY = allPooled[0] || '';
+  } else {
+    process.env.GEMINI_API_KEYS = allPooled.join(',');
+    process.env.GEMINI_API_KEY = allPooled[0] || '';
+  }
+
+  return {
+    success: addedCount > 0 || (validKeys.length > 0 && userKeys.length > 0),
+    added: addedCount,
+    duplicates: validKeys.length - addedCount,
+    count: userKeys.length,
+    totalPooled: allPooled.length
+  };
+}
+
+// Backward compatible alias
+async function addApiKeyToFirebase(provider = 'groq', newKey, userId = null) {
+  return addApiKeysToFirebase(provider, newKey, userId);
 }
 
 // 4. Clear keys for a specific user
@@ -421,48 +445,54 @@ async function getApiKeyDashboard(userId) {
 
   const maskKey = (k) => k.length > 10 ? `${k.slice(0, 6)}...${k.slice(-4)}` : '******';
 
-  const groqList = userGroqKeys.length > 0 
-    ? userGroqKeys.map((k, idx) => `  ${idx + 1}. \`${maskKey(k)}\``).join('\n')
-    : '  ❌ មិនទាន់មាន';
+  const formatKeyList = (keys) => {
+    if (!keys || keys.length === 0) return '  ❌ មិនទាន់មាន';
+    const displayCount = Math.min(keys.length, 8);
+    let list = keys.slice(0, displayCount).map((k, idx) => `  ${idx + 1}. \`${maskKey(k)}\``).join('\n');
+    if (keys.length > displayCount) {
+      list += `\n  ... និង ${keys.length - displayCount} Keys ផ្សេងទៀត (សរុប ${keys.length} Keys ♾️)`;
+    }
+    return list;
+  };
 
-  const geminiList = userGeminiKeys.length > 0 
-    ? userGeminiKeys.map((k, idx) => `  ${idx + 1}. \`${maskKey(k)}\``).join('\n')
-    : '  ❌ មិនទាន់មាន';
+  const groqList = formatKeyList(userGroqKeys);
+  const geminiList = formatKeyList(userGeminiKeys);
 
   let adminPoolSection = '';
   if (isAdmin) {
-    adminPoolSection = `\n👑 **Admin Master Key Pool (កូតា ៥០% ឥតដែនកំណត់)**៖
-• ⚡ Groq Pooled: **${allGroqKeys.length} Keys** (កូតាសុវត្ថិភាព 50%: ~${(allGroqKeys.length * 7200).toLocaleString()} req/ថ្ងៃ)
-• 🤖 Gemini Pooled: **${allGeminiKeys.length} Keys** (កូតាសុវត្ថិភាព 50%: ~${(allGeminiKeys.length * 750).toLocaleString()} req/ថ្ងៃ)
-• 🛡️ ស្ថានភាព៖ 🟢 **Auto-Rotation សកម្ម (ប្រើប្រាស់ 50% នៃកូតា User ទាំងអស់)**\n`;
+    adminPoolSection = `\n👑 **Admin Master Key Pool (កូតាសរុបពី User ទាំងអស់)**៖
+• ⚡ Groq Pooled: **${allGroqKeys.length} Keys** (កូតាសរុប: ~${(allGroqKeys.length * 14400).toLocaleString()} req/ថ្ងៃ)
+• 🤖 Gemini Pooled: **${allGeminiKeys.length} Keys** (កូតាសរុប: ~${(allGeminiKeys.length * 1500).toLocaleString()} req/ថ្ងៃ)
+• 🛡️ ស្ថានភាព៖ 🟢 **Auto-Rotation សកម្ម (បង្វិលស្វ័យប្រវត្តិកាលណាជាប់ Quota)**\n`;
   }
 
   const text = `🔑 **ការកំណត់ AI API Keys (រក្សាទុកក្នុង Firebase)**
-(ផ្ទុកបានរហូតដល់ ១០ Keys ក្នុងមួយគណនី & Auto-Rotate ពេលជាប់ Quota)
+(♾️ ដាក់បានច្រើនឥតដែនកំណត់ / Unlimited Keys & Auto-Rotate ពេលជាប់ Quota)
 ${adminPoolSection}
-⚡ **Groq AI (Llama 3.3 70B)** [${userGroqKeys.length}/10 Keys]៖
+⚡ **Groq AI (Llama 3.3 70B)** [${userGroqKeys.length} Keys ផ្ទាល់ខ្លួន - ឥតកំណត់]៖
 ${groqList}
-• ល្បឿន៖ 0.8s | កូតា៖ 14,400 Requests/Key/ថ្ងៃ
+• ល្បឿន៖ ~0.8s ⚡ (លឿនបំផុត & Free 100%) | កូតា៖ 14,400 Requests/Key/ថ្ងៃ
 
-🤖 **Google Gemini AI** [${userGeminiKeys.length}/10 Keys]៖
+🤖 **Google Gemini AI** [${userGeminiKeys.length} Keys ផ្ទាល់ខ្លួន - ឥតកំណត់]៖
 ${geminiList}
+• កូតា៖ 1,500 Requests/Key/ថ្ងៃ | គាំទ្រ Multimodal Audio & Translation
+
+💡 **គន្លឹះពិសេស៖**
+អ្នកអាច Copy ផ្ញើ Key ម្ដងមួយ ឬផ្ញើម្ដងច្រើន Keys ព្រមគ្នា (ចុះបន្ទាត់ ឬដាក់សញ្ញាក្បៀស ,) ដាក់បានច្រើនអត់កំណត់ចំនួនឃីឡើយ!
 
 👉 សូមជ្រើសរើសប៊ូតុងខាងក្រោមដើម្បីបន្ថែម ឬលុប Key៖`;
 
-  const buttons = [];
-  if (userGroqKeys.length < 10) {
-    buttons.push([Markup.button.callback(`⚡ ➕ បន្ថែម Groq Key (${userGroqKeys.length}/10)`, 'input_groq_key')]);
-  }
-  if (userGeminiKeys.length < 10) {
-    buttons.push([Markup.button.callback(`🤖 ➕ បន្ថែម Gemini Key (${userGeminiKeys.length}/10)`, 'input_gemini_key')]);
-  }
+  const buttons = [
+    [Markup.button.callback(`⚡ ➕ បន្ថែម Groq Key (${userGroqKeys.length} Keys - ឥតកំណត់)`, 'input_groq_key')],
+    [Markup.button.callback(`🤖 ➕ បន្ថែម Gemini Key (${userGeminiKeys.length} Keys - ឥតកំណត់)`, 'input_gemini_key')]
+  ];
 
   const deleteRow = [];
   if (userGroqKeys.length > 0) {
-    deleteRow.push(Markup.button.callback('🗑️ លុប Groq Key របស់ខ្ញុំ', 'clear_groq_keys'));
+    deleteRow.push(Markup.button.callback('🗑️ លុប Groq Keys របស់ខ្ញុំ', 'clear_groq_keys'));
   }
   if (userGeminiKeys.length > 0) {
-    deleteRow.push(Markup.button.callback('🗑️ លុប Gemini Key របស់ខ្ញុំ', 'clear_gemini_keys'));
+    deleteRow.push(Markup.button.callback('🗑️ លុប Gemini Keys របស់ខ្ញុំ', 'clear_gemini_keys'));
   }
   if (deleteRow.length > 0) buttons.push(deleteRow);
 
@@ -925,9 +955,12 @@ bot.action('input_groq_key', async (ctx) => {
   const state = getUserState(userId);
   state.currentMode = 'waiting_groq_key';
   await ctx.answerCbQuery();
-  const text = `⚡ **បញ្ចូល Groq API Key (Free ១០០%)**
+  const text = `⚡ **បញ្ចូល Groq API Key (លឿនបំផុត ~1s & Free ១០០%)**
 
-👉 សូម Copy និងផ្ញើ Key របស់អ្នក (ផ្ដើមដោយ \`gsk_...\`) មកកាន់ Bot ក្នុង Chat នេះ៖
+👉 សូម Copy និងផ្ញើ Key របស់អ្នកមកកាន់ Bot ក្នុង Chat នេះ៖
+• អាចផ្ញើម្ដងមួយ ឬផ្ញើច្រើន Keys ព្រមគ្នា (ចុះបន្ទាត់ ឬដាក់សញ្ញាក្បៀស ,)
+• ដាក់បានច្រើនឥតកំណត់ (Unlimited Keys ♾️)
+• Key នីមួយៗផ្ដើមដោយ \`gsk_...\`
 
 💡 បើមិនទាន់មាន Key ទេ សូមចុចយកឥតគិតថ្លៃ (10 វិនាទី)៖
 https://console.groq.com/keys`;
@@ -940,9 +973,12 @@ bot.action('input_gemini_key', async (ctx) => {
   const state = getUserState(userId);
   state.currentMode = 'waiting_gemini_key';
   await ctx.answerCbQuery();
-  const text = `🤖 **បញ្ចូល Gemini API Key**
+  const text = `🤖 **បញ្ចូល Google Gemini API Key (Unlimited Keys)**
 
-👉 សូម Copy និងផ្ញើ Key របស់អ្នក (ផ្ដើមដោយ \`AIzaSy...\`) មកកាន់ Bot ក្នុង Chat នេះ៖
+👉 សូម Copy និងផ្ញើ Key របស់អ្នកមកកាន់ Bot ក្នុង Chat នេះ៖
+• អាចផ្ញើម្ដងមួយ ឬផ្ញើច្រើន Keys ព្រមគ្នា (ចុះបន្ទាត់ ឬដាក់សញ្ញាក្បៀស ,)
+• ដាក់បានច្រើនឥតកំណត់ (Unlimited Keys ♾️)
+• Key នីមួយៗផ្ដើមដោយ \`AIzaSy...\`
 
 💡 យក Key ឥតគិតថ្លៃនៅទីនេះ៖
 https://aistudio.google.com`;
@@ -1179,22 +1215,44 @@ bot.on('text', async (ctx) => {
     ]));
   }
 
-  // Handle API key input (by mode or auto-detected by prefix gsk_ or AIzaSy)
-  const trimmed = text.trim();
-  if (state.currentMode === 'waiting_groq_key' || state.currentMode === 'waiting_gemini_key' || trimmed.startsWith('gsk_') || trimmed.startsWith('AIzaSy')) {
-    const provider = (trimmed.startsWith('gsk_') || state.currentMode === 'waiting_groq_key') ? 'groq' : 'gemini';
-    const result = await addApiKeyToFirebase(provider, trimmed, userId);
+  // Handle API key input (supports batch multi-line/comma inputs, auto-detection for gsk_ & AIzaSy, and unlimited keys)
+  const isKeyMode = state.currentMode === 'waiting_groq_key' || state.currentMode === 'waiting_gemini_key';
+  const hasKeyPattern = text.includes('gsk_') || text.includes('AIzaSy');
 
-    state.currentMode = null;
-    if (result.success) {
-      const providerLabel = provider === 'groq' ? '⚡ Groq AI (Llama 3.3 70B)' : '🤖 Google Gemini AI';
-      return ctx.reply(`🎉 **បានរក្សាទុក Key ចូលក្នុង Firebase ជោគជ័យ!**\n\n🔑 ប្រភេទ៖ ${providerLabel}\n📊 ចំនួន Key ផ្ទាល់ខ្លួនរបស់អ្នក៖ ${result.count}/10 Keys\n🌐 Pooled សរុបក្នុងប្រព័ន្ធ៖ ${result.totalPooled} Keys\n💾 រក្សាទុកក្នុង Firebase ជាអចិន្ត្រៃយ៍រហូតដល់អ្នកលុបវិញ!\n🔄 ប្រព័ន្ធនឹង Auto-Rotate ប្តូរ Key ស្វ័យប្រវត្តិនៅពេល Key ណាមួយជាប់ Quota!\n\n👉 លោកអ្នកអាចផ្ញើវីដេអូរឿងចូលបានភ្លាមៗ!`, storyToolsMenu);
-    } else if (result.reason === 'duplicate') {
-      return ctx.reply(`⚠️ Key នេះមាននៅក្នុងប្រព័ន្ធរួចហើយ! (ចំនួនបច្ចុប្បន្ន: ${result.count}/10)`, storyToolsMenu);
-    } else if (result.reason === 'limit_reached') {
-      return ctx.reply(`⚠️ គណនីរបស់អ្នកបានពេញកម្រិតកំណត់ ១០ Keys រួចហើយ! សូមលុប Key មួយចំនួនសិន មុននឹងបន្ថែមថ្មី។`, storyToolsMenu);
-    } else {
-      return ctx.reply(`❌ មិនអាចរក្សាទុក Key បានទេ។ សូមពិនិត្យ Key ឡើងវិញ។`, storyToolsMenu);
+  if (isKeyMode || hasKeyPattern) {
+    const tokens = text.split(/[\r\n,;\s]+/).map(t => t.trim()).filter(Boolean);
+    const groqKeys = [];
+    const geminiKeys = [];
+
+    for (const token of tokens) {
+      if (token.startsWith('gsk_') && token.length >= 20) {
+        groqKeys.push(token);
+      } else if (token.startsWith('AIzaSy') && token.length >= 25) {
+        geminiKeys.push(token);
+      } else if (token.length >= 20) {
+        // Classify based on active mode
+        if (state.currentMode === 'waiting_groq_key') groqKeys.push(token);
+        else if (state.currentMode === 'waiting_gemini_key') geminiKeys.push(token);
+      }
+    }
+
+    if (groqKeys.length > 0 || geminiKeys.length > 0) {
+      state.currentMode = null;
+      const reportSections = [];
+
+      if (groqKeys.length > 0) {
+        const resGroq = await addApiKeysToFirebase('groq', groqKeys, userId);
+        reportSections.push(`⚡ **Groq AI (Llama 3.3 70B - Free & Fast ~1s)**៖\n• បានបញ្ចូលថ្មី៖ +${resGroq.added} Keys\n• សរុបក្នុងគណនីរបស់អ្នក៖ ${resGroq.count} Keys (ឥតកំណត់ ♾️)\n• Pooled សរុបក្នុងប្រព័ន្ធ៖ ${resGroq.totalPooled} Keys`);
+      }
+
+      if (geminiKeys.length > 0) {
+        const resGemini = await addApiKeysToFirebase('gemini', geminiKeys, userId);
+        reportSections.push(`🤖 **Google Gemini AI**៖\n• បានបញ្ចូលថ្មី៖ +${resGemini.added} Keys\n• សរុបក្នុងគណនីរបស់អ្នក៖ ${resGemini.count} Keys (ឥតកំណត់ ♾️)\n• Pooled សរុបក្នុងប្រព័ន្ធ៖ ${resGemini.totalPooled} Keys`);
+      }
+
+      return ctx.reply(`🎉 **បានរក្សាទុក Key ចូលក្នុង Firebase ជោគជ័យ!**\n\n${reportSections.join('\n\n')}\n\n♾️ **គាំទ្រការដាក់ Keys ច្រើនឥតដែនកំណត់ (Unlimited Keys)**\n🔄 **Auto-Rotate ស្វ័យប្រវត្តិកាលណា Key ណាមួយជាប់ Quota ឬ Error!**\n💾 **រក្សាទុកក្នុង Firebase ជាអចិន្ត្រៃយ៍រហូតដល់អ្នកលុបវិញ!**\n\n👉 លោកអ្នកអាចផ្ញើ ឬ Forward វីដេអូរឿងចូលដើម្បីបកប្រែបានភ្លាមៗ!`, storyToolsMenu);
+    } else if (isKeyMode) {
+      return ctx.reply('⚠️ Key មិនត្រឹមត្រូវ! Groq Key ត្រូវផ្ដើមដោយ `gsk_...` និង Gemini Key ត្រូវផ្ដើមដោយ `AIzaSy...`។ សូមពិនិត្យ និងផ្ញើឡើងវិញ។', storyToolsMenu);
     }
   }
 

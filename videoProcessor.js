@@ -299,6 +299,11 @@ ${numberedText}`;
             return parsed;
           }
         }
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn(`[Gemini Error ${res.status}] Rotating key: ${errText.slice(0, 100)}`);
+        rotateGeminiKey();
+        continue;
       }
     } catch (err) {
       console.warn('Gemini batch error:', err.message);
@@ -308,7 +313,7 @@ ${numberedText}`;
   return null;
 }
 
-// 2. AI Batch Translation via Groq LLM (supports 10 keys & auto-rotation, with Verified Speaker Gender)
+// 2. AI Batch Translation via Groq LLM (supports unlimited keys & auto-rotation, with Verified Speaker Gender)
 async function batchTranslateWithGroq(segmentsChunk) {
   const keys = getAllGroqKeys();
   if (!keys.length) return null;
@@ -369,6 +374,11 @@ ${numberedText}`;
             return parsed;
           }
         }
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn(`[Groq Error ${res.status}] Rotating key: ${errText.slice(0, 100)}`);
+        rotateGroqKey();
+        continue;
       }
     } catch (err) {
       console.warn('Groq batch error:', err.message);
