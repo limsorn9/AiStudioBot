@@ -500,6 +500,8 @@ ${geminiList}
     buttons.push([Markup.button.callback('👑 គ្រប់គ្រង Master Pool ពី User ទាំងអស់', 'open_admin_pool')]);
   }
 
+  buttons.push([Markup.button.callback('🔬 Test ពិនិត្យ AI Models & ជំនាន់ API', 'test_ai_models')]);
+
   buttons.push([
     Markup.button.url('🔗 យក Groq Key (Free)', 'https://console.groq.com/keys'),
     Markup.button.url('🔗 យក Gemini Key', 'https://aistudio.google.com')
@@ -632,6 +634,148 @@ bot.action('view_admin_pool_keys', async (ctx) => {
   msg += (geminiPool.map((k, i) => `${i + 1}. \`${maskKey(k)}\``).join('\n') || '❌ គ្មាន');
 
   ctx.reply(msg);
+});
+
+// --- Helper: Check Active AI Models & Provider Health ---
+async function checkAiModelsHealth() {
+  const results = {
+    gemini: { ok: false, activeModel: '', models: [], latencyMs: 0, error: null },
+    groq: { ok: false, activeModel: '', models: [], latencyMs: 0, error: null }
+  };
+
+  // 1. Check Gemini
+  const geminiKeys = await getAllPooledApiKeys('gemini');
+  const geminiKey = geminiKeys[0] || process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    const t0 = Date.now();
+    try {
+      const mRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`, {
+        signal: AbortSignal.timeout(10000)
+      });
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        const genModels = (mData.models || [])
+          .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+          .map(m => m.name.replace('models/', ''));
+        results.gemini.models = genModels.filter(name => name.includes('flash') || name.includes('pro')).slice(0, 10);
+      }
+
+      const activeModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+      results.gemini.activeModel = activeModel;
+      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Hello, respond with OK' }] }]
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      results.gemini.latencyMs = Date.now() - t0;
+      if (genRes.ok) {
+        results.gemini.ok = true;
+      } else {
+        const errText = await genRes.text().catch(() => '');
+        results.gemini.error = `HTTP ${genRes.status}: ${errText.slice(0, 120)}`;
+      }
+    } catch (e) {
+      results.gemini.error = e.message;
+    }
+  } else {
+    results.gemini.error = 'គ្មាន Gemini Key ក្នុង Pool ទេ';
+  }
+
+  // 2. Check Groq
+  const groqKeys = await getAllPooledApiKeys('groq');
+  const groqKey = groqKeys[0] || process.env.GROQ_API_KEY;
+  if (groqKey) {
+    const t0 = Date.now();
+    try {
+      const mRes = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { 'Authorization': `Bearer ${groqKey}` },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        results.groq.models = (mData.data || []).map(m => m.id).filter(id => !id.includes('whisper')).slice(0, 10);
+      }
+
+      const activeModel = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
+      results.groq.activeModel = activeModel;
+      const genRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${groqKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: activeModel,
+          messages: [{ role: 'user', content: 'Say OK' }]
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+      results.groq.latencyMs = Date.now() - t0;
+      if (genRes.ok) {
+        results.groq.ok = true;
+      } else {
+        const errText = await genRes.text().catch(() => '');
+        results.groq.error = `HTTP ${genRes.status}: ${errText.slice(0, 120)}`;
+      }
+    } catch (e) {
+      results.groq.error = e.message;
+    }
+  } else {
+    results.groq.error = 'គ្មាន Groq Key ក្នុង Pool ទេ';
+  }
+
+  return results;
+}
+
+async function sendAiHealthReport(ctx) {
+  const loading = await ctx.reply('⏳ កំពុងតេស្ត និងទាញយកបញ្ជី AI Models ពី Google Gemini & Groq Cloud API...');
+  const res = await checkAiModelsHealth();
+
+  let text = `🔍 **របាយការណ៍ AI Models ក្នុង Bot & ជំនាន់ចុងក្រោយ៖**\n\n`;
+
+  // Gemini Section
+  text += `🤖 **Google Gemini AI:**\n`;
+  if (res.gemini.ok) {
+    text += `• ស្ថានភាព៖ ✅ ដំណើរការល្អ (ល្បឿន ${res.gemini.latencyMs}ms)\n`;
+    text += `• ម៉ូឌែលកំពុងប្រើ៖ \`${res.gemini.activeModel}\`\n`;
+    text += `• ម៉ូឌែលដែលគាំទ្រ (Available Models)៖\n`;
+    text += (res.gemini.models.map(m => `  └ \`${m}\``).join('\n') || '  └ N/A');
+    text += `\n\n`;
+  } else {
+    text += `• ស្ថានភាព៖ ⚠️ មិនទាន់ដំណើរការ (${res.gemini.error || 'Unknown'})\n\n`;
+  }
+
+  // Groq Section
+  text += `⚡ **Groq AI (Ultra-Fast LPUs):**\n`;
+  if (res.groq.ok) {
+    text += `• ស្ថានភាព៖ ✅ ដំណើរការល្អ (ល្បឿន ${res.groq.latencyMs}ms)\n`;
+    text += `• ម៉ូឌែលកំពុងប្រើ៖ \`${res.groq.activeModel}\`\n`;
+    text += `• ម៉ូឌែលដែលគាំទ្រ (Available Models)៖\n`;
+    text += (res.groq.models.map(m => `  └ \`${m}\``).join('\n') || '  └ N/A');
+    text += `\n\n`;
+  } else {
+    text += `• ស្ថានភាព៖ ⚠️ មិនទាន់ដំណើរការ (${res.groq.error || 'Unknown'})\n\n`;
+  }
+
+  text += `💡 *ព័ត៌មាននេះជួយឱ្យអ្នកដឹងថាតើក្រុមហ៊ុន Google & Groq មានម៉ូឌែលជំនាន់ថ្មីណាខ្លះ ដើម្បីប្រាប់ឱ្យអាប់ដេតកម្មវិធីយើងបានទាន់ពេល!*`;
+
+  try {
+    await ctx.telegram.editMessageText(ctx.chat.id, loading.message_id, undefined, text, { parse_mode: 'Markdown' });
+  } catch (e) {
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  }
+}
+
+bot.command(['test_ai', 'check_ai', 'models'], async (ctx) => {
+  await sendAiHealthReport(ctx);
+});
+
+bot.action('test_ai_models', async (ctx) => {
+  await ctx.answerCbQuery();
+  await sendAiHealthReport(ctx);
 });
 
 bot.hears('📢 ផ្សព្វផ្សាយសារ (Broadcast)', (ctx) => {
