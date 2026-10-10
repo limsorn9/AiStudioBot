@@ -1090,18 +1090,63 @@ bot.on('text', async (ctx) => {
     }
 
     if (state.currentMode === 'waiting_download') {
-      const progressMsg = await ctx.reply(`⬇️ កំពុងទាញយកវីដេអូពី Link...
+      const progressMsg = await ctx.reply(`⬇️ កំពុងទាញយកវីដេអូ...
 🔗 ${targetUrl}
-⚡ កម្រិតច្បាស់: Ultra HD (No Watermark)
+⚡ yt-dlp Best Quality (No Watermark)
 
-⏳ កំពុងដំណើរការ... [■■■■■□□□□□] 50%`);
+⏳ [░░░░░░░░░░░] 0% - កំពុងទាញយក...`);
 
-      setTimeout(() => {
-        ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null, `✅ ទាញយកវីដេអូរួចរាល់ដោយជោគជ័យ!
-🔗 Link: ${targetUrl}
-📦 ទំហំ: HD Ready
-📥 ប្រព័ន្ធកំពុងផ្ញើ File វីដេអូ ឬ Direct Download Link មកកាន់អ្នក...`).catch(()=>{});
-      }, 4000);
+      // Save URL in state for quick_download button
+      state.pendingDownloadUrl = targetUrl;
+
+      // Actually download the video using yt-dlp
+      try {
+        const os = require('os');
+        const taskId = `dl_${Date.now()}`;
+        const workDir = require('path').join(os.tmpdir(), taskId);
+        require('fs').mkdirSync(workDir, { recursive: true });
+        const outPath = require('path').join(workDir, 'video.mp4');
+
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+          `⬇️ yt-dlp កំពុងទាញយក...\n🔗 ${targetUrl}\n\n⏳ [███░░░░░░░░] 30% - Fetching best quality...`).catch(() => {});
+
+        // Run yt-dlp
+        const { exec } = require('child_process');
+        await new Promise((resolve, reject) => {
+          const cmd = `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 --no-playlist --socket-timeout 60 --retries 3 -o "${outPath}" "${targetUrl}" 2>&1`;
+          exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 300000 }, (err, stdout, stderr) => {
+            if (err) {
+              console.error('yt-dlp error:', stderr || err.message);
+              reject(new Error(stderr || err.message));
+            } else {
+              resolve();
+            }
+          });
+        });
+
+        if (!require('fs').existsSync(outPath) || require('fs').statSync(outPath).size < 1000) {
+          throw new Error('yt-dlp: ទាញបានឯកសារទទេ!');
+        }
+
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+          `⬇️ ទាញយករួចហើយ!\n🔗 ${targetUrl}\n\n⏳ [██████████░] 90% - ផ្ញើជូន Telegram...`).catch(() => {});
+
+        const stat = require('fs').statSync(outPath);
+        const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
+        const caption = `✅ ទាញយកវីដេអូជោគជ័យ!\n🔗 ${targetUrl}\n📦 ទំហំ: ${sizeMb}MB\n⚡ No Watermark | Best Quality\n🤖 @AiStudioSSOnline_bot`;
+
+        await ctx.replyWithVideo({ source: outPath }, { caption, supports_streaming: true });
+
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+          `✅ ទាញយករួចរាល់ 100%! 🎉\n📦 ទំហំ: ${sizeMb}MB`).catch(() => {});
+
+        // Cleanup
+        require('fs').rmSync(workDir, { recursive: true, force: true });
+      } catch (dlErr) {
+        console.error('Download error:', dlErr.message);
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+          `❌ ទាញយកបរាជ័យ!\n🔗 ${targetUrl}\n⚠️ ${dlErr.message.substring(0, 200)}\n\n💡 ព្យាយាមម្ដងទៀត ឬប្រើ Link ផ្ទាល់ (Direct MP4 URL)!`).catch(() => {});
+      }
       return;
     }
 
@@ -1373,9 +1418,67 @@ bot.action('quick_transcript', (ctx) => {
   ctx.reply('🤖 សូមផ្ញើឯកសារ ឬបញ្ជាក់ Link ម្ដងទៀត ដើម្បីដំណើរការស្រង់ Subtitle SRT:');
 });
 
-bot.action('quick_download', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.reply('⬇️ កំពុងដំណើរការទាញយកវីដេអូពី Link... សូមរង់ចាំបន្តិច!');
+bot.action('quick_download', async (ctx) => {
+  ctx.answerCbQuery().catch(() => {});
+  const userId = ctx.from.id;
+  const state = getUserState(userId);
+
+  // Get URL from message text or pending state
+  const msgText = ctx.callbackQuery?.message?.text || '';
+  const urlMatch = msgText.match(/(https?:\/\/[^\s]+)/i);
+  const targetUrl = (urlMatch && urlMatch[0]) || state.pendingDownloadUrl || '';
+
+  if (!targetUrl) {
+    return ctx.reply('⚠️ មិនរកឃើញ Link! សូមផ្ញើ Link វីដេអូម្ដងទៀត!');
+  }
+
+  // Set mode and trigger download
+  state.currentMode = 'waiting_download';
+  state.pendingDownloadUrl = targetUrl;
+
+  const progressMsg = await ctx.reply(`⬇️ yt-dlp កំពុងទាញយក...\n🔗 ${targetUrl}\n\n⏳ [░░░░░░░░░░░] 0%`);
+
+  try {
+    const os = require('os');
+    const taskId = `dl_${Date.now()}`;
+    const workDir = require('path').join(os.tmpdir(), taskId);
+    require('fs').mkdirSync(workDir, { recursive: true });
+    const outPath = require('path').join(workDir, 'video.mp4');
+
+    await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+      `⬇️ yt-dlp កំពុងទាញយក...\n🔗 ${targetUrl}\n\n⏳ [███░░░░░░░░] 30%`).catch(() => {});
+
+    const { exec } = require('child_process');
+    await new Promise((resolve, reject) => {
+      const cmd = `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 --no-playlist --socket-timeout 60 --retries 3 -o "${outPath}" "${targetUrl}" 2>&1`;
+      exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 300000 }, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve();
+      });
+    });
+
+    if (!require('fs').existsSync(outPath) || require('fs').statSync(outPath).size < 1000) {
+      throw new Error('yt-dlp: ទាញបានឯកសារទទេ!');
+    }
+
+    await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+      `⬇️ ទាញយករួចហើយ!\n🔗 ${targetUrl}\n\n⏳ [██████████░] 90% - ផ្ញើជូន Telegram...`).catch(() => {});
+
+    const stat = require('fs').statSync(outPath);
+    const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
+    const caption = `✅ ទាញយកវីដេអូជោគជ័យ!\n🔗 ${targetUrl}\n📦 ទំហំ: ${sizeMb}MB\n⚡ No Watermark | Best Quality\n🤖 @AiStudioSSOnline_bot`;
+
+    await ctx.replyWithVideo({ source: outPath }, { caption, supports_streaming: true });
+    await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+      `✅ ទាញយករួចរាល់ 100%! 🎉 | 📦 ${sizeMb}MB`).catch(() => {});
+
+    require('fs').rmSync(workDir, { recursive: true, force: true });
+    state.currentMode = null;
+  } catch (dlErr) {
+    console.error('quick_download error:', dlErr.message);
+    await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, null,
+      `❌ ទាញយកបរាជ័យ!\n⚠️ ${dlErr.message.substring(0, 200)}`).catch(() => {});
+  }
 });
 
 // Swap Male <-> Female Characters in Subtitle
