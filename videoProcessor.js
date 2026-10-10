@@ -754,10 +754,11 @@ async function transcribeAndDiarizeWithGemini(audioPath, onProgress) {
   try {
     const workDir = path.dirname(audioPath);
     const duration = await getAudioDuration(audioPath);
-    const CHUNK_SEC = 300; // 5-minute chunks for 100% reliable JSON & rapid response
+    // Smaller chunks (120s / 2mn) ensure rapid API responses (<4s), avoid token limits, and provide smooth progress
+    const CHUNK_SEC = 120; 
 
-    // If audio is <= 360 seconds (6 minutes), do it in a single slice
-    if (duration <= 360) {
+    // If audio is <= 120 seconds (2 minutes), do it in a single slice
+    if (duration <= 120) {
       const mp3Path = path.join(workDir, `gemini_audio_${Date.now()}.mp3`);
       try {
         await runCmd(`ffmpeg -y -i "${audioPath}" -ar 16000 -ac 1 -b:a 32k "${mp3Path}"`);
@@ -778,10 +779,11 @@ async function transcribeAndDiarizeWithGemini(audioPath, onProgress) {
       return null;
     }
 
-    // Audio > 6 minutes (Long Movies): Split into 5-minute chunks
+    // Audio > 2 minutes (Long Movies): Split into 2-minute (120s) chunks for ultra-stable processing
     const totalChunks = Math.ceil(duration / CHUNK_SEC);
-    console.log(`🎬 វីដេអូរឿងវែង (${Math.round(duration)}s)៖ កំពុងបែងចែកជា ${totalChunks} ភាគ (5 នាទី/ភាគ) សម្រាប់ Gemini AI វិភាគ...`);
+    console.log(`🎬 វីដេអូរឿងវែង (${Math.round(duration)}s)៖ កំពុងបែងចែកជា ${totalChunks} ភាគតូចៗ (2 នាទី/ភាគ) សម្រាប់ Gemini AI វិភាគ...`);
     const allSegments = [];
+    const formatTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
     for (let c = 0; c < totalChunks; c++) {
       const startSec = c * CHUNK_SEC;
@@ -798,7 +800,7 @@ async function transcribeAndDiarizeWithGemini(audioPath, onProgress) {
 
       if (onProgress) {
         const chunkPercent = Math.min(75, 35 + Math.round(((c + 1) / totalChunks) * 35));
-        await onProgress(`Gemini AI កំពុងស្ដាប់ និងបកប្រែភាគទី ${c + 1}/${totalChunks} (${Math.round(startSec / 60)}mn-${Math.round((startSec + durSec) / 60)}mn)...`, chunkPercent);
+        await onProgress(`Gemini AI កំពុងស្ដាប់ និងបកប្រែភាគទី ${c + 1}/${totalChunks} (${formatTime(startSec)}-${formatTime(startSec + durSec)})...`, chunkPercent);
       }
 
       let segs = await transcribeSingleChunkWithGemini(chunkMp3, startSec);
@@ -810,7 +812,7 @@ async function transcribeAndDiarizeWithGemini(audioPath, onProgress) {
       try { if (fs.existsSync(chunkMp3)) fs.unlinkSync(chunkMp3); } catch (e) {}
 
       if (segs && segs.length > 0) {
-        console.log(`✅ ភាគទី ${c + 1}/${totalChunks} ស្រង់បាន ${segs.length} segments`);
+        console.log(`✅ ភាគទី ${c + 1}/${totalChunks} (${formatTime(startSec)}-${formatTime(startSec + durSec)}) ស្រង់បាន ${segs.length} segments`);
         allSegments.push(...segs);
       }
     }
