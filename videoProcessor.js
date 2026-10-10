@@ -654,7 +654,7 @@ LISTEN CAREFULLY TO THE REAL VOICES IN THIS AUDIO TRACK.
 ]
 Output ONLY valid JSON. No markdown formatting, no commentary.`;
 
-        const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+        const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
         const res = await fetch(url, {
@@ -719,7 +719,7 @@ async function transcribeSingleChunkWithGroq(chunkAudioPath, chunkStartSec = 0) 
     const audioBuffer = fs.readFileSync(chunkAudioPath);
     const formData = new FormData();
     formData.append('file', new Blob([audioBuffer], { type: 'audio/mp3' }), 'audio.mp3');
-    formData.append('model', 'whisper-large-v3');
+    formData.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
     formData.append('response_format', 'verbose_json');
 
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -880,7 +880,7 @@ async function transcribeAudio(audioPath, onProgress) {
       const audioBuffer = fs.readFileSync(audioPath);
       const formData = new FormData();
       formData.append('file', new Blob([audioBuffer], { type: 'audio/wav' }), 'audio.wav');
-      formData.append('model', 'whisper-large-v3');
+      formData.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
       formData.append('response_format', 'verbose_json');
 
       const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
